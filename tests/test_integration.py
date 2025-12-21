@@ -14,15 +14,13 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
-from starlette.applications import Starlette
-from starlette.middleware import Middleware
-from starlette.middleware.cors import CORSMiddleware
-from starlette.routing import Route
-from starlette.testclient import TestClient
 
-from forge_armory.admin import get_admin_routes
+from forge_armory.admin import router as admin_router
 from forge_armory.db.models import Base
 from forge_armory.db.repository import (
     BackendCreate,
@@ -124,32 +122,31 @@ async def seeded_session_maker(
 
 
 def create_test_app(session_maker: async_sessionmaker[AsyncSession]) -> Any:
-    """Create a test Starlette app with mocked backend connections."""
+    """Create a test FastAPI app with mocked backend connections."""
     # Create manager with mocked connections
     manager = BackendManager(session_maker)
 
     # Create MCP gateway
     mcp_gateway = MCPGateway(manager)
 
-    middleware = [
-        Middleware(
-            CORSMiddleware,
-            allow_origins=["*"],
-            allow_credentials=True,
-            allow_methods=["*"],
-            allow_headers=["*"],
-        ),
-    ]
+    app = FastAPI()
 
-    app = Starlette(
-        middleware=middleware,
-        routes=[
-            Route("/.well-known/mcp.json", well_known_mcp, methods=["GET"]),
-            Route("/mcp", mcp_handler, methods=["POST"]),
-            Route("/mcp/{prefix}", mount_handler, methods=["POST"]),
-            *get_admin_routes(),
-        ],
+    # Add CORS middleware
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
+
+    # Include admin router
+    app.include_router(admin_router)
+
+    # Add MCP routes
+    app.add_api_route("/.well-known/mcp.json", well_known_mcp, methods=["GET"])
+    app.add_api_route("/mcp", mcp_handler, methods=["POST"])
+    app.add_api_route("/mcp/{prefix}", mount_handler, methods=["POST"])
 
     app.state.session_maker = session_maker
     app.state.backend_manager = manager

@@ -1,6 +1,6 @@
 """Admin API for managing backends."""
 
-from forge_armory.admin.routes import get_admin_routes
+from forge_armory.admin.routes import router
 from forge_armory.admin.schemas import (
     BackendCreateRequest,
     BackendListResponse,
@@ -15,7 +15,7 @@ from forge_armory.admin.schemas import (
 )
 
 __all__ = [
-    "get_admin_routes",
+    "router",
     "BackendCreateRequest",
     "BackendUpdateRequest",
     "BackendResponse",

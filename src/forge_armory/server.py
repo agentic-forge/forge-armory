@@ -4,15 +4,13 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from starlette.applications import Starlette
-from starlette.middleware import Middleware
-from starlette.middleware.cors import CORSMiddleware
-from starlette.responses import JSONResponse
-from starlette.routing import Route
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
-from forge_armory.admin import get_admin_routes
+from forge_armory.admin import router as admin_router
 from forge_armory.db import (
     BackendRepository,
     ToolRepository,
@@ -21,9 +19,6 @@ from forge_armory.db import (
     init_db,
 )
 from forge_armory.gateway import BackendManager
-
-if TYPE_CHECKING:
-    from starlette.requests import Request
 
 logger = logging.getLogger(__name__)
 
@@ -94,14 +89,12 @@ class MCPGateway:
                 status_code=500,
             )
 
-    async def handle_mount_request(self, request: Request) -> JSONResponse:
+    async def handle_mount_request(self, request: Request, prefix: str) -> JSONResponse:
         """Handle MCP requests at /mcp/{prefix} endpoint.
 
         This provides direct access to a specific backend's tools
         without the prefix.
         """
-        prefix = request.path_params["prefix"]
-
         try:
             body = await request.json()
         except Exception:
@@ -242,48 +235,12 @@ class MCPGateway:
 
 
 # ============================================================================
-# Discovery Endpoint
-# ============================================================================
-
-
-async def well_known_mcp(request: Request) -> JSONResponse:
-    """Serve MCP discovery metadata at /.well-known/mcp.json."""
-    session_maker = request.app.state.session_maker
-
-    async with session_maker() as session:
-        backend_repo = BackendRepository(session)
-        backends = await backend_repo.list_all(enabled_only=True)
-
-        # Build mount points for backends with mount_enabled
-        mounts = {}
-        for backend in backends:
-            if backend.mount_enabled:
-                mounts[backend.effective_prefix] = {
-                    "url": f"/mcp/{backend.effective_prefix}",
-                    "description": f"Direct access to {backend.name}",
-                }
-
-    return JSONResponse({
-        "name": "forge-armory",
-        "version": "0.1.0",
-        "description": "MCP protocol gateway - aggregates tools from multiple MCP servers",
-        "endpoints": {
-            "aggregated": {
-                "url": "/mcp",
-                "description": "All tools from all backends with prefixed names",
-            },
-            "mounts": mounts,
-        },
-    })
-
-
-# ============================================================================
 # Application Factory
 # ============================================================================
 
 
 @asynccontextmanager
-async def lifespan(app: Starlette):
+async def lifespan(app: FastAPI):
     """Application lifespan handler."""
     logger.info("Starting Forge Armory gateway...")
 
@@ -312,39 +269,73 @@ async def lifespan(app: Starlette):
     logger.info("Gateway shutdown complete")
 
 
+# Create the application
+app = FastAPI(
+    title="Forge Armory",
+    description="MCP protocol gateway - aggregates tools from multiple MCP servers",
+    version="0.1.0",
+    lifespan=lifespan,
+)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Include admin API router
+app.include_router(admin_router)
+
+
+# ============================================================================
+# MCP Endpoints
+# ============================================================================
+
+
+@app.get("/.well-known/mcp.json")
+async def well_known_mcp(request: Request) -> dict[str, Any]:
+    """Serve MCP discovery metadata."""
+    session_maker = request.app.state.session_maker
+
+    async with session_maker() as session:
+        backend_repo = BackendRepository(session)
+        backends = await backend_repo.list_all(enabled_only=True)
+
+        # Build mount points for backends with mount_enabled
+        mounts = {}
+        for backend in backends:
+            if backend.mount_enabled:
+                mounts[backend.effective_prefix] = {
+                    "url": f"/mcp/{backend.effective_prefix}",
+                    "description": f"Direct access to {backend.name}",
+                }
+
+    return {
+        "name": "forge-armory",
+        "version": "0.1.0",
+        "description": "MCP protocol gateway - aggregates tools from multiple MCP servers",
+        "endpoints": {
+            "aggregated": {
+                "url": "/mcp",
+                "description": "All tools from all backends with prefixed names",
+            },
+            "mounts": mounts,
+        },
+    }
+
+
+@app.post("/mcp")
 async def mcp_handler(request: Request) -> JSONResponse:
     """Handle MCP requests at /mcp endpoint."""
     gateway: MCPGateway = request.app.state.mcp_gateway
     return await gateway.handle_mcp_request(request)
 
 
-async def mount_handler(request: Request) -> JSONResponse:
+@app.post("/mcp/{prefix}")
+async def mount_handler(request: Request, prefix: str) -> JSONResponse:
     """Handle MCP requests at /mcp/{prefix} endpoint."""
     gateway: MCPGateway = request.app.state.mcp_gateway
-    return await gateway.handle_mount_request(request)
-
-
-# Create the application
-middleware = [
-    Middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    ),
-]
-
-app = Starlette(
-    lifespan=lifespan,
-    middleware=middleware,
-    routes=[
-        # Discovery
-        Route("/.well-known/mcp.json", well_known_mcp, methods=["GET"]),
-        # MCP endpoints
-        Route("/mcp", mcp_handler, methods=["POST"]),
-        Route("/mcp/{prefix}", mount_handler, methods=["POST"]),
-        # Admin API
-        *get_admin_routes(),
-    ],
-)
+    return await gateway.handle_mount_request(request, prefix)

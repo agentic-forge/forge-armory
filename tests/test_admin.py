@@ -5,12 +5,12 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
-from starlette.applications import Starlette
-from starlette.testclient import TestClient
 
-from forge_armory.admin import get_admin_routes
+from forge_armory.admin import router as admin_router
 from forge_armory.db.models import Base
 from forge_armory.db.repository import (
     BackendCreate,
@@ -47,18 +47,28 @@ async def session_maker() -> async_sessionmaker[AsyncSession]:
 
 
 @pytest.fixture
-def app(session_maker: async_sessionmaker[AsyncSession]) -> Starlette:
-    """Create a test Starlette app with admin routes."""
-    app = Starlette(routes=get_admin_routes())
+def app(session_maker: async_sessionmaker[AsyncSession]) -> FastAPI:
+    """Create a test FastAPI app with admin routes."""
+    app = FastAPI()
+    app.include_router(admin_router)
     app.state.session_maker = session_maker
     app.state.backend_manager = BackendManager(session_maker)
     return app
 
 
 @pytest.fixture
-def client(app: Starlette) -> TestClient:
+def client(app: FastAPI) -> TestClient:
     """Create a test client."""
     return TestClient(app)
+
+
+def create_test_app(session_maker: async_sessionmaker[AsyncSession]) -> FastAPI:
+    """Create a test FastAPI app with admin routes."""
+    app = FastAPI()
+    app.include_router(admin_router)
+    app.state.session_maker = session_maker
+    app.state.backend_manager = BackendManager(session_maker)
+    return app
 
 
 class TestBackendRoutes:
@@ -68,9 +78,7 @@ class TestBackendRoutes:
         self, session_maker: async_sessionmaker[AsyncSession]
     ) -> None:
         """List backends returns empty list when no backends exist."""
-        app = Starlette(routes=get_admin_routes())
-        app.state.session_maker = session_maker
-        app.state.backend_manager = BackendManager(session_maker)
+        app = create_test_app(session_maker)
 
         with TestClient(app) as client:
             response = client.get("/admin/backends")
@@ -91,9 +99,7 @@ class TestBackendRoutes:
             await repo.create(BackendCreate(name="search", url="http://localhost:8001/mcp"))
             await session.commit()
 
-        app = Starlette(routes=get_admin_routes())
-        app.state.session_maker = session_maker
-        app.state.backend_manager = BackendManager(session_maker)
+        app = create_test_app(session_maker)
 
         with TestClient(app) as client:
             response = client.get("/admin/backends")
@@ -108,10 +114,8 @@ class TestBackendRoutes:
         self, session_maker: async_sessionmaker[AsyncSession]
     ) -> None:
         """Create backend creates and connects."""
-        app = Starlette(routes=get_admin_routes())
-        app.state.session_maker = session_maker
-        manager = BackendManager(session_maker)
-        app.state.backend_manager = manager
+        app = create_test_app(session_maker)
+        manager = app.state.backend_manager
 
         with (
             patch.object(manager, "add_backend", new_callable=AsyncMock) as mock_add,
@@ -142,9 +146,7 @@ class TestBackendRoutes:
             await repo.create(BackendCreate(name="weather", url="http://localhost:8000/mcp"))
             await session.commit()
 
-        app = Starlette(routes=get_admin_routes())
-        app.state.session_maker = session_maker
-        app.state.backend_manager = BackendManager(session_maker)
+        app = create_test_app(session_maker)
 
         with TestClient(app) as client:
             response = client.post(
@@ -156,7 +158,7 @@ class TestBackendRoutes:
             )
 
         assert response.status_code == 409
-        assert "already exists" in response.json()["error"]
+        assert "already exists" in response.json()["detail"]
 
     async def test_get_backend(
         self, session_maker: async_sessionmaker[AsyncSession]
@@ -167,9 +169,7 @@ class TestBackendRoutes:
             await repo.create(BackendCreate(name="weather", url="http://localhost:8000/mcp"))
             await session.commit()
 
-        app = Starlette(routes=get_admin_routes())
-        app.state.session_maker = session_maker
-        app.state.backend_manager = BackendManager(session_maker)
+        app = create_test_app(session_maker)
 
         with TestClient(app) as client:
             response = client.get("/admin/backends/weather")
@@ -183,9 +183,7 @@ class TestBackendRoutes:
         self, session_maker: async_sessionmaker[AsyncSession]
     ) -> None:
         """Get backend returns 404 for non-existent backend."""
-        app = Starlette(routes=get_admin_routes())
-        app.state.session_maker = session_maker
-        app.state.backend_manager = BackendManager(session_maker)
+        app = create_test_app(session_maker)
 
         with TestClient(app) as client:
             response = client.get("/admin/backends/nonexistent")
@@ -201,9 +199,7 @@ class TestBackendRoutes:
             await repo.create(BackendCreate(name="weather", url="http://localhost:8000/mcp"))
             await session.commit()
 
-        app = Starlette(routes=get_admin_routes())
-        app.state.session_maker = session_maker
-        app.state.backend_manager = BackendManager(session_maker)
+        app = create_test_app(session_maker)
 
         with TestClient(app) as client:
             response = client.put(
@@ -224,9 +220,7 @@ class TestBackendRoutes:
             await repo.create(BackendCreate(name="weather", url="http://localhost:8000/mcp"))
             await session.commit()
 
-        app = Starlette(routes=get_admin_routes())
-        app.state.session_maker = session_maker
-        app.state.backend_manager = BackendManager(session_maker)
+        app = create_test_app(session_maker)
 
         with TestClient(app) as client:
             response = client.delete("/admin/backends/weather")
@@ -244,9 +238,7 @@ class TestBackendRoutes:
         self, session_maker: async_sessionmaker[AsyncSession]
     ) -> None:
         """Delete backend returns 404 for non-existent backend."""
-        app = Starlette(routes=get_admin_routes())
-        app.state.session_maker = session_maker
-        app.state.backend_manager = BackendManager(session_maker)
+        app = create_test_app(session_maker)
 
         with TestClient(app) as client:
             response = client.delete("/admin/backends/nonexistent")
@@ -266,10 +258,8 @@ class TestBackendActionRoutes:
             await repo.create(BackendCreate(name="weather", url="http://localhost:8000/mcp"))
             await session.commit()
 
-        app = Starlette(routes=get_admin_routes())
-        app.state.session_maker = session_maker
-        manager = BackendManager(session_maker)
-        app.state.backend_manager = manager
+        app = create_test_app(session_maker)
+        manager = app.state.backend_manager
 
         with (
             patch.object(manager, "add_backend", new_callable=AsyncMock) as mock_add,
@@ -299,10 +289,8 @@ class TestBackendActionRoutes:
             )
             await session.commit()
 
-        app = Starlette(routes=get_admin_routes())
-        app.state.session_maker = session_maker
-        manager = BackendManager(session_maker)
-        app.state.backend_manager = manager
+        app = create_test_app(session_maker)
+        manager = app.state.backend_manager
 
         with (
             patch.object(manager, "add_backend", new_callable=AsyncMock) as mock_add,
@@ -325,10 +313,7 @@ class TestBackendActionRoutes:
             await repo.create(BackendCreate(name="weather", url="http://localhost:8000/mcp"))
             await session.commit()
 
-        app = Starlette(routes=get_admin_routes())
-        app.state.session_maker = session_maker
-        manager = BackendManager(session_maker)
-        app.state.backend_manager = manager
+        app = create_test_app(session_maker)
 
         with TestClient(app) as client:
             response = client.post("/admin/backends/weather/disable")
@@ -345,9 +330,7 @@ class TestToolRoutes:
         self, session_maker: async_sessionmaker[AsyncSession]
     ) -> None:
         """List tools returns empty list when no tools exist."""
-        app = Starlette(routes=get_admin_routes())
-        app.state.session_maker = session_maker
-        app.state.backend_manager = BackendManager(session_maker)
+        app = create_test_app(session_maker)
 
         with TestClient(app) as client:
             response = client.get("/admin/tools")
@@ -376,9 +359,7 @@ class TestToolRoutes:
             )
             await session.commit()
 
-        app = Starlette(routes=get_admin_routes())
-        app.state.session_maker = session_maker
-        app.state.backend_manager = BackendManager(session_maker)
+        app = create_test_app(session_maker)
 
         with TestClient(app) as client:
             response = client.get("/admin/tools")
@@ -397,9 +378,7 @@ class TestMetricsRoutes:
         self, session_maker: async_sessionmaker[AsyncSession]
     ) -> None:
         """Get metrics returns zeros when no calls exist."""
-        app = Starlette(routes=get_admin_routes())
-        app.state.session_maker = session_maker
-        app.state.backend_manager = BackendManager(session_maker)
+        app = create_test_app(session_maker)
 
         with TestClient(app) as client:
             response = client.get("/admin/metrics")
@@ -439,9 +418,7 @@ class TestMetricsRoutes:
             )
             await session.commit()
 
-        app = Starlette(routes=get_admin_routes())
-        app.state.session_maker = session_maker
-        app.state.backend_manager = BackendManager(session_maker)
+        app = create_test_app(session_maker)
 
         with TestClient(app) as client:
             response = client.get("/admin/metrics")
@@ -481,9 +458,7 @@ class TestMetricsRoutes:
             )
             await session.commit()
 
-        app = Starlette(routes=get_admin_routes())
-        app.state.session_maker = session_maker
-        app.state.backend_manager = BackendManager(session_maker)
+        app = create_test_app(session_maker)
 
         with TestClient(app) as client:
             response = client.get("/admin/metrics?backend=weather")
