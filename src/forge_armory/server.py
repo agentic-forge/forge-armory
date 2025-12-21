@@ -177,7 +177,7 @@ class MCPGateway:
 
     async def _handle_list_tools_for_mount(self, prefix: str) -> dict[str, Any]:
         """List tools for a specific mount point (unprefixed)."""
-        async with async_session_maker() as session:
+        async with self.manager._session_maker() as session:
             backend_repo = BackendRepository(session)
             tool_repo = ToolRepository(session)
 
