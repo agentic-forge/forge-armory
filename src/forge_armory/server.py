@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from forge_armory.admin import router as admin_router
 from forge_armory.db import (
@@ -67,26 +69,26 @@ class MCPGateway:
             elif method == "ping":
                 result = {}
             else:
+                # JSON-RPC spec: return 200 with error in body, not HTTP error status
                 return JSONResponse(
                     {
                         "jsonrpc": "2.0",
                         "error": {"code": -32601, "message": f"Method not found: {method}"},
                         "id": request_id,
                     },
-                    status_code=400,
                 )
 
             return JSONResponse({"jsonrpc": "2.0", "result": result, "id": request_id})
 
         except Exception as e:
             logger.exception("Error handling MCP request")
+            # JSON-RPC spec: return 200 with error in body, not HTTP error status
             return JSONResponse(
                 {
                     "jsonrpc": "2.0",
                     "error": {"code": -32603, "message": str(e)},
                     "id": request_id,
                 },
-                status_code=500,
             )
 
     async def handle_mount_request(self, request: Request, prefix: str) -> JSONResponse:
@@ -117,26 +119,26 @@ class MCPGateway:
             elif method == "ping":
                 result = {}
             else:
+                # JSON-RPC spec: return 200 with error in body, not HTTP error status
                 return JSONResponse(
                     {
                         "jsonrpc": "2.0",
                         "error": {"code": -32601, "message": f"Method not found: {method}"},
                         "id": request_id,
                     },
-                    status_code=400,
                 )
 
             return JSONResponse({"jsonrpc": "2.0", "result": result, "id": request_id})
 
         except Exception as e:
             logger.exception("Error handling MCP mount request")
+            # JSON-RPC spec: return 200 with error in body, not HTTP error status
             return JSONResponse(
                 {
                     "jsonrpc": "2.0",
                     "error": {"code": -32603, "message": str(e)},
                     "id": request_id,
                 },
-                status_code=500,
             )
 
     async def _handle_initialize(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -288,6 +290,45 @@ app.add_middleware(
 
 # Include admin API router
 app.include_router(admin_router)
+
+
+# ============================================================================
+# Admin UI Static Files
+# ============================================================================
+
+# Path to the admin UI dist folder
+ADMIN_UI_DIR = Path(__file__).parent.parent.parent / "admin-ui" / "dist"
+
+
+@app.get("/ui/{path:path}")
+async def serve_ui(path: str) -> FileResponse:
+    """Serve admin UI static files.
+
+    Falls back to index.html for client-side routing.
+    """
+    file_path = ADMIN_UI_DIR / path
+
+    # If file exists, serve it
+    if file_path.is_file():
+        return FileResponse(file_path)
+
+    # Otherwise serve index.html for client-side routing
+    return FileResponse(ADMIN_UI_DIR / "index.html")
+
+
+@app.get("/ui")
+async def redirect_ui() -> FileResponse:
+    """Redirect /ui to /ui/ for proper routing."""
+    return FileResponse(ADMIN_UI_DIR / "index.html")
+
+
+# Mount static assets (CSS, JS, etc.) - this handles the assets directory
+if ADMIN_UI_DIR.exists():
+    app.mount(
+        "/ui/assets",
+        StaticFiles(directory=ADMIN_UI_DIR / "assets"),
+        name="ui-assets",
+    )
 
 
 # ============================================================================
