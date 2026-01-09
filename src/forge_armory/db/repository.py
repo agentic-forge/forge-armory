@@ -199,7 +199,7 @@ class ToolRepository:
         # Create new tools
         prefix = backend.effective_prefix
         new_tools = []
-        now = datetime.now(UTC)
+        now = datetime.now(UTC).replace(tzinfo=None)
 
         for tool_info in tools:
             prefixed_name = f"{prefix}__{tool_info.name}"
