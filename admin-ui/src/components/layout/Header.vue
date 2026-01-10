@@ -2,8 +2,10 @@
 import { useRoute } from 'vue-router'
 import { computed } from 'vue'
 import Button from 'primevue/button'
+import { useTheme } from '@/composables/useTheme'
 
 const route = useRoute()
+const { isDark, toggleTheme } = useTheme()
 
 const pageTitle = computed(() => {
   const titles: Record<string, string> = {
@@ -29,6 +31,14 @@ function handleRefresh() {
   <header class="app-header">
     <h1 class="header-title">{{ pageTitle }}</h1>
     <div class="header-actions">
+      <Button
+        :icon="isDark ? 'pi pi-sun' : 'pi pi-moon'"
+        severity="secondary"
+        text
+        rounded
+        :aria-label="isDark ? 'Switch to light mode' : 'Switch to dark mode'"
+        @click="toggleTheme"
+      />
       <Button
         icon="pi pi-refresh"
         severity="secondary"

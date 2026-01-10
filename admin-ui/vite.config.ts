@@ -12,10 +12,10 @@ export default defineConfig({
     }
   },
   server: {
-    port: 3000,
+    port: 4043,
     proxy: {
       '/admin': {
-        target: 'http://localhost:8080',
+        target: 'http://localhost:4042',
         changeOrigin: true,
       },
     },

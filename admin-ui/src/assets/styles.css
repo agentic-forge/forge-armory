@@ -96,7 +96,7 @@ body {
 }
 
 .nav-item.router-link-active {
-  background-color: var(--p-primary-100);
+  background-color: color-mix(in srgb, var(--p-primary-color) 15%, transparent);
   color: var(--p-primary-color);
 }
 
@@ -401,18 +401,18 @@ body {
 }
 
 .status-badge.success {
-  background-color: var(--p-green-100);
-  color: var(--p-green-700);
+  background-color: color-mix(in srgb, var(--p-green-500) 20%, transparent);
+  color: var(--p-green-500);
 }
 
 .status-badge.error {
-  background-color: var(--p-red-100);
-  color: var(--p-red-700);
+  background-color: color-mix(in srgb, var(--p-red-500) 20%, transparent);
+  color: var(--p-red-500);
 }
 
 .status-badge.warning {
-  background-color: var(--p-yellow-100);
-  color: var(--p-yellow-700);
+  background-color: color-mix(in srgb, var(--p-yellow-500) 20%, transparent);
+  color: var(--p-yellow-500);
 }
 
 /* Responsive */
