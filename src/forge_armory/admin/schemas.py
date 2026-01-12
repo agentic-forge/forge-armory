@@ -102,11 +102,112 @@ class MetricsResponse(BaseModel):
     max_latency_ms: int
 
 
+class EnhancedMetricsResponse(BaseModel):
+    """Response model for enhanced metrics with percentiles."""
+
+    total_calls: int
+    success_count: int
+    error_count: int
+    success_rate: float
+    avg_latency_ms: float
+    min_latency_ms: int
+    max_latency_ms: int
+    p50_latency_ms: int | None = None
+    p95_latency_ms: int | None = None
+    p99_latency_ms: int | None = None
+
+
 class BackendMetricsResponse(BaseModel):
     """Response model for per-backend metrics."""
 
     backend_name: str
     metrics: MetricsResponse
+
+
+# ============================================================================
+# Tool Call Schemas
+# ============================================================================
+
+
+class ToolCallResponse(BaseModel):
+    """Response model for a single tool call."""
+
+    id: UUID
+    tool_id: UUID | None
+    backend_name: str
+    tool_name: str
+    arguments: dict
+    success: bool
+    error_message: str | None
+    latency_ms: int
+    called_at: datetime
+    # Request context fields
+    client_ip: str | None = None
+    request_id: str | None = None
+    session_id: str | None = None
+    caller: str | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class ToolCallListResponse(BaseModel):
+    """Response model for paginated tool call list."""
+
+    calls: list[ToolCallResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+# ============================================================================
+# Tool Metrics Schemas
+# ============================================================================
+
+
+class ToolMetricsResponse(BaseModel):
+    """Response model for per-tool metrics."""
+
+    tool_name: str
+    backend_name: str
+    total_calls: int
+    success_count: int
+    error_count: int
+    success_rate: float
+    avg_latency_ms: float
+    min_latency_ms: int
+    max_latency_ms: int
+    p95_latency_ms: int | None = None
+    last_called_at: datetime | None = None
+
+
+class ToolMetricsListResponse(BaseModel):
+    """Response model for tool metrics list."""
+
+    tools: list[ToolMetricsResponse]
+    total: int
+
+
+# ============================================================================
+# Time Series Schemas
+# ============================================================================
+
+
+class TimeSeriesPoint(BaseModel):
+    """Single data point in a time series."""
+
+    timestamp: datetime
+    total_calls: int
+    success_count: int
+    error_count: int
+    avg_latency_ms: float
+
+
+class TimeSeriesResponse(BaseModel):
+    """Response model for time series metrics."""
+
+    period: str
+    granularity: str
+    data: list[TimeSeriesPoint]
 
 
 # ============================================================================

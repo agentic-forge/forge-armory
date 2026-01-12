@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from forge_armory.db import (
@@ -26,6 +27,19 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class RequestContext:
+    """Context information about the incoming request.
+
+    Used to track where tool calls originate from.
+    """
+
+    client_ip: str | None = None
+    request_id: str | None = None
+    session_id: str | None = None
+    caller: str | None = None
 
 
 class BackendManager:
@@ -149,7 +163,12 @@ class BackendManager:
             repo = ToolRepository(session)
             return await repo.list_all()
 
-    async def call_tool(self, prefixed_name: str, arguments: dict[str, Any]) -> Any:
+    async def call_tool(
+        self,
+        prefixed_name: str,
+        arguments: dict[str, Any],
+        context: RequestContext | None = None,
+    ) -> Any:
         """Route a tool call to the correct backend.
 
         1. Look up tool in DB by prefixed_name
@@ -160,6 +179,7 @@ class BackendManager:
         Args:
             prefixed_name: Prefixed tool name (e.g., "weather__get_forecast").
             arguments: Tool arguments.
+            context: Optional request context for tracking origin.
 
         Returns:
             Tool result.
@@ -220,6 +240,10 @@ class BackendManager:
                         success=success,
                         error_message=error_message,
                         latency_ms=latency_ms,
+                        client_ip=context.client_ip if context else None,
+                        request_id=context.request_id if context else None,
+                        session_id=context.session_id if context else None,
+                        caller=context.caller if context else None,
                     ),
                     tool_id=tool_id,
                 )

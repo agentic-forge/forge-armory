@@ -12,10 +12,17 @@ from forge_armory.admin.schemas import (
     BackendListResponse,
     BackendResponse,
     BackendUpdateRequest,
+    EnhancedMetricsResponse,
     MessageResponse,
     MetricsResponse,
     RefreshResponse,
+    TimeSeriesPoint,
+    TimeSeriesResponse,
+    ToolCallListResponse,
+    ToolCallResponse,
     ToolListResponse,
+    ToolMetricsListResponse,
+    ToolMetricsResponse,
     ToolResponse,
 )
 from forge_armory.db import (
@@ -25,6 +32,7 @@ from forge_armory.db import (
     ToolCallRepository,
     ToolRepository,
 )
+from forge_armory.db.repository import parse_time_period
 from forge_armory.gateway import (
     BackendConnectionError,
     BackendNotFoundError,
@@ -413,4 +421,181 @@ async def get_metrics(
         avg_latency_ms=stats["avg_latency_ms"],
         min_latency_ms=stats["min_latency_ms"],
         max_latency_ms=stats["max_latency_ms"],
+    )
+
+
+@router.get("/metrics/enhanced", response_model=EnhancedMetricsResponse)
+async def get_enhanced_metrics(
+    session_maker: SessionMakerDep,
+    backend: Annotated[str | None, Query(description="Filter by backend name")] = None,
+    tool: Annotated[str | None, Query(description="Filter by tool name")] = None,
+    period: Annotated[str | None, Query(description="Time period (1h, 24h, 7d, 30d, all)")] = None,
+) -> EnhancedMetricsResponse:
+    """Get enhanced metrics with percentile latencies."""
+    since = parse_time_period(period) if period else None
+
+    async with session_maker() as session:
+        repo = ToolCallRepository(session)
+        stats = await repo.get_stats_with_percentiles(
+            backend_name=backend,
+            tool_name=tool,
+            since=since,
+        )
+
+    return EnhancedMetricsResponse(
+        total_calls=stats["total_calls"],
+        success_count=stats["success_count"],
+        error_count=stats["error_count"],
+        success_rate=stats["success_rate"],
+        avg_latency_ms=stats["avg_latency_ms"],
+        min_latency_ms=stats["min_latency_ms"],
+        max_latency_ms=stats["max_latency_ms"],
+        p50_latency_ms=stats["p50_latency_ms"],
+        p95_latency_ms=stats["p95_latency_ms"],
+        p99_latency_ms=stats["p99_latency_ms"],
+    )
+
+
+@router.get("/metrics/calls", response_model=ToolCallListResponse)
+async def list_tool_calls(
+    session_maker: SessionMakerDep,
+    backend: Annotated[str | None, Query(description="Filter by backend name")] = None,
+    tool: Annotated[str | None, Query(description="Filter by tool name")] = None,
+    success: Annotated[bool | None, Query(description="Filter by success status")] = None,
+    period: Annotated[str | None, Query(description="Time period (1h, 24h, 7d, 30d, all)")] = None,
+    limit: Annotated[int, Query(ge=1, le=1000, description="Max results")] = 100,
+    offset: Annotated[int, Query(ge=0, description="Pagination offset")] = 0,
+) -> ToolCallListResponse:
+    """List tool calls with pagination and filtering."""
+    since = parse_time_period(period) if period else None
+
+    async with session_maker() as session:
+        repo = ToolCallRepository(session)
+
+        # Get paginated calls
+        calls = await repo.list_paginated(
+            backend_name=backend,
+            tool_name=tool,
+            success=success,
+            since=since,
+            limit=limit,
+            offset=offset,
+        )
+
+        # Get total count for pagination
+        total = await repo.count(
+            backend_name=backend,
+            tool_name=tool,
+            success=success,
+            since=since,
+        )
+
+    return ToolCallListResponse(
+        calls=[
+            ToolCallResponse(
+                id=call.id,
+                tool_id=call.tool_id,
+                backend_name=call.backend_name,
+                tool_name=call.tool_name,
+                arguments=call.arguments,
+                success=call.success,
+                error_message=call.error_message,
+                latency_ms=call.latency_ms,
+                called_at=call.called_at,
+            )
+            for call in calls
+        ],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/metrics/by-tool", response_model=ToolMetricsListResponse)
+async def get_tool_metrics(
+    session_maker: SessionMakerDep,
+    backend: Annotated[str | None, Query(description="Filter by backend name")] = None,
+    period: Annotated[str | None, Query(description="Time period (1h, 24h, 7d, 30d, all)")] = None,
+    order_by: Annotated[
+        str, Query(description="Sort field (total_calls, error_count, avg_latency_ms, p95_latency_ms)")
+    ] = "total_calls",
+    order: Annotated[str, Query(description="Sort order (asc, desc)")] = "desc",
+    limit: Annotated[int, Query(ge=1, le=200, description="Max results")] = 50,
+) -> ToolMetricsListResponse:
+    """Get per-tool aggregated metrics."""
+    since = parse_time_period(period) if period else None
+
+    async with session_maker() as session:
+        repo = ToolCallRepository(session)
+        metrics = await repo.get_tool_metrics(
+            backend_name=backend,
+            since=since,
+            order_by=order_by,
+            order=order,
+            limit=limit,
+        )
+
+    return ToolMetricsListResponse(
+        tools=[
+            ToolMetricsResponse(
+                tool_name=m["tool_name"],
+                backend_name=m["backend_name"],
+                total_calls=m["total_calls"],
+                success_count=m["success_count"],
+                error_count=m["error_count"],
+                success_rate=m["success_rate"],
+                avg_latency_ms=m["avg_latency_ms"],
+                min_latency_ms=m["min_latency_ms"],
+                max_latency_ms=m["max_latency_ms"],
+                p95_latency_ms=m["p95_latency_ms"],
+                last_called_at=m["last_called_at"],
+            )
+            for m in metrics
+        ],
+        total=len(metrics),
+    )
+
+
+@router.get("/metrics/timeseries", response_model=TimeSeriesResponse)
+async def get_timeseries(
+    session_maker: SessionMakerDep,
+    period: Annotated[str, Query(description="Time period (1h, 24h, 7d, 30d)")] = "24h",
+    backend: Annotated[str | None, Query(description="Filter by backend name")] = None,
+    tool: Annotated[str | None, Query(description="Filter by tool name")] = None,
+    granularity: Annotated[str | None, Query(description="Granularity (minute, hour, day)")] = None,
+) -> TimeSeriesResponse:
+    """Get time-bucketed metrics for charts."""
+    since = parse_time_period(period)
+
+    # Auto-select granularity based on period if not specified
+    if not granularity:
+        if period in ("1h", "2h"):
+            granularity = "minute"
+        elif period in ("24h", "7d"):
+            granularity = "hour"
+        else:
+            granularity = "day"
+
+    async with session_maker() as session:
+        repo = ToolCallRepository(session)
+        data = await repo.get_timeseries(
+            backend_name=backend,
+            tool_name=tool,
+            since=since,
+            granularity=granularity,
+        )
+
+    return TimeSeriesResponse(
+        period=period,
+        granularity=granularity,
+        data=[
+            TimeSeriesPoint(
+                timestamp=d["timestamp"],
+                total_calls=d["total_calls"],
+                success_count=d["success_count"],
+                error_count=d["error_count"],
+                avg_latency_ms=d["avg_latency_ms"],
+            )
+            for d in data
+        ],
     )

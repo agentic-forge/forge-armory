@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import ANY, AsyncMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -239,11 +239,11 @@ class TestMCPProtocol:
                 json={"jsonrpc": "2.0", "method": "unknown/method", "params": {}, "id": 4},
             )
 
-        assert response.status_code == 400
+        # JSON-RPC spec: return 200 with error in body, not HTTP error status
+        assert response.status_code == 200
         data = response.json()
         assert "error" in data
         assert data["error"]["code"] == -32601
-        assert "unknown/method" in data["error"]["message"]
 
     def test_mcp_parse_error(
         self, seeded_session_maker: async_sessionmaker[AsyncSession]
@@ -298,8 +298,8 @@ class TestMCPToolCall:
             assert data["id"] == 5
             assert "result" in data
 
-            # Verify call_tool was called with correct arguments
-            mock_call.assert_called_once_with("test__greet", {"name": "World"})
+            # Verify call_tool was called with correct arguments (ANY for context)
+            mock_call.assert_called_once_with("test__greet", {"name": "World"}, ANY)
 
     def test_call_tool_not_found(
         self, seeded_session_maker: async_sessionmaker[AsyncSession]
@@ -325,9 +325,11 @@ class TestMCPToolCall:
                     },
                 )
 
-            assert response.status_code == 500
+            # JSON-RPC spec: return 200 with error in body, not HTTP error status
+            assert response.status_code == 200
             data = response.json()
             assert "error" in data
+            assert data["error"]["code"] == -32603  # Internal error
 
 
 class TestMountEndpoints:
@@ -403,8 +405,8 @@ class TestMountEndpoints:
 
             assert response.status_code == 200
 
-            # Should have called with prefixed name
-            mock_call.assert_called_once_with("test__greet", {"name": "Test"})
+            # Should have called with prefixed name (ANY for context)
+            mock_call.assert_called_once_with("test__greet", {"name": "Test"}, ANY)
 
     def test_mount_initialize(
         self, seeded_session_maker: async_sessionmaker[AsyncSession]

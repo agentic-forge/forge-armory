@@ -188,6 +188,27 @@ class ToolCall(Base):
         nullable=False,
     )
 
+    # Request context fields for tracking origin
+    client_ip: Mapped[str | None] = mapped_column(
+        String(45),  # IPv6 addresses can be up to 45 chars
+        nullable=True,
+        index=True,
+    )
+    request_id: Mapped[str | None] = mapped_column(
+        String(64),  # UUID or custom request ID
+        nullable=True,
+        index=True,
+    )
+    session_id: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+    )
+    caller: Mapped[str | None] = mapped_column(
+        String(200),  # User identifier or service name
+        nullable=True,
+        index=True,
+    )
+
     # Relationships
     tool: Mapped[Tool | None] = relationship(
         "Tool",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -20,9 +21,63 @@ from forge_armory.db import (
     close_db,
     init_db,
 )
-from forge_armory.gateway import BackendManager
+from forge_armory.gateway import BackendManager, RequestContext
 
 logger = logging.getLogger(__name__)
+
+
+def get_client_ip(request: Request) -> str | None:
+    """Extract client IP from request, handling reverse proxy headers.
+
+    Checks headers in order of preference:
+    1. X-Forwarded-For (standard proxy header, takes first IP)
+    2. X-Real-IP (Nginx/Traefik)
+    3. CF-Connecting-IP (Cloudflare)
+    4. Falls back to request.client.host
+    """
+    # X-Forwarded-For may contain multiple IPs: "client, proxy1, proxy2"
+    forwarded_for = request.headers.get("x-forwarded-for")
+    if forwarded_for:
+        # Take the first IP (original client)
+        return forwarded_for.split(",")[0].strip()
+
+    # X-Real-IP is typically set by Nginx/Traefik
+    real_ip = request.headers.get("x-real-ip")
+    if real_ip:
+        return real_ip.strip()
+
+    # Cloudflare specific header
+    cf_ip = request.headers.get("cf-connecting-ip")
+    if cf_ip:
+        return cf_ip.strip()
+
+    # Fall back to direct connection
+    if request.client:
+        return request.client.host
+
+    return None
+
+
+def get_request_context(request: Request) -> RequestContext:
+    """Extract request context from FastAPI request.
+
+    Extracts:
+    - client_ip: From proxy headers or direct connection
+    - request_id: From X-Request-ID header or generates a new one
+    - session_id: From X-Session-ID header (optional)
+    - caller: From X-Caller or Authorization header user info (optional)
+    """
+    # Get or generate request ID for tracing
+    request_id = request.headers.get("x-request-id")
+    if not request_id:
+        request_id = str(uuid.uuid4())[:8]  # Short ID for convenience
+
+    return RequestContext(
+        client_ip=get_client_ip(request),
+        request_id=request_id,
+        session_id=request.headers.get("x-session-id"),
+        caller=request.headers.get("x-caller"),
+    )
 
 
 # ============================================================================
@@ -47,6 +102,9 @@ class MCPGateway:
         This is the aggregated endpoint where all tools are available
         with their prefixed names.
         """
+        # Extract request context for tracking
+        context = get_request_context(request)
+
         try:
             body = await request.json()
         except Exception:
@@ -65,7 +123,7 @@ class MCPGateway:
             elif method == "tools/list":
                 result = await self._handle_list_tools()
             elif method == "tools/call":
-                result = await self._handle_call_tool(params)
+                result = await self._handle_call_tool(params, context)
             elif method == "ping":
                 result = {}
             else:
@@ -97,6 +155,9 @@ class MCPGateway:
         This provides direct access to a specific backend's tools
         without the prefix.
         """
+        # Extract request context for tracking
+        context = get_request_context(request)
+
         try:
             body = await request.json()
         except Exception:
@@ -115,7 +176,7 @@ class MCPGateway:
             elif method == "tools/list":
                 result = await self._handle_list_tools_for_mount(prefix)
             elif method == "tools/call":
-                result = await self._handle_call_tool_for_mount(prefix, params)
+                result = await self._handle_call_tool_for_mount(prefix, params, context)
             elif method == "ping":
                 result = {}
             else:
@@ -199,18 +260,20 @@ class MCPGateway:
                 ]
             }
 
-    async def _handle_call_tool(self, params: dict[str, Any]) -> dict[str, Any]:
+    async def _handle_call_tool(
+        self, params: dict[str, Any], context: RequestContext
+    ) -> dict[str, Any]:
         """Call a tool using its prefixed name."""
         tool_name = params.get("name", "")
         arguments = params.get("arguments", {})
 
-        result = await self.manager.call_tool(tool_name, arguments)
+        result = await self.manager.call_tool(tool_name, arguments, context)
 
         # Convert result to MCP format
         return self._format_tool_result(result)
 
     async def _handle_call_tool_for_mount(
-        self, prefix: str, params: dict[str, Any]
+        self, prefix: str, params: dict[str, Any], context: RequestContext
     ) -> dict[str, Any]:
         """Call a tool on a specific mount using unprefixed name."""
         tool_name = params.get("name", "")
@@ -218,7 +281,7 @@ class MCPGateway:
 
         # Convert to prefixed name for routing
         prefixed_name = f"{prefix}__{tool_name}"
-        result = await self.manager.call_tool(prefixed_name, arguments)
+        result = await self.manager.call_tool(prefixed_name, arguments, context)
 
         return self._format_tool_result(result)
 
@@ -329,6 +392,17 @@ if ADMIN_UI_DIR.exists():
         StaticFiles(directory=ADMIN_UI_DIR / "assets"),
         name="ui-assets",
     )
+
+
+# ============================================================================
+# Health Check Endpoint
+# ============================================================================
+
+
+@app.get("/health")
+async def health_check() -> dict[str, str]:
+    """Health check endpoint for Docker/k8s health probes."""
+    return {"status": "healthy", "service": "forge-armory"}
 
 
 # ============================================================================

@@ -3,9 +3,17 @@ import type {
   BackendCreate,
   BackendListResponse,
   BackendUpdate,
+  EnhancedMetrics,
   Metrics,
+  MetricsParams,
   RefreshResponse,
+  TimeSeriesParams,
+  TimeSeriesResponse,
+  ToolCallListResponse,
+  ToolCallsParams,
   ToolListResponse,
+  ToolMetricsListResponse,
+  ToolMetricsParams,
 } from '@/types'
 
 const API_BASE = '/admin'
@@ -119,6 +127,55 @@ export const api = {
     const url = backend
       ? `${API_BASE}/metrics?backend=${encodeURIComponent(backend)}`
       : `${API_BASE}/metrics`
+    const res = await fetch(url)
+    return handleResponse(res)
+  },
+
+  async getEnhancedMetrics(params?: MetricsParams): Promise<EnhancedMetrics> {
+    const searchParams = new URLSearchParams()
+    if (params?.backend) searchParams.set('backend', params.backend)
+    if (params?.tool) searchParams.set('tool', params.tool)
+    if (params?.period) searchParams.set('period', params.period)
+    const query = searchParams.toString()
+    const url = `${API_BASE}/metrics/enhanced${query ? '?' + query : ''}`
+    const res = await fetch(url)
+    return handleResponse(res)
+  },
+
+  async listToolCalls(params?: ToolCallsParams): Promise<ToolCallListResponse> {
+    const searchParams = new URLSearchParams()
+    if (params?.backend) searchParams.set('backend', params.backend)
+    if (params?.tool) searchParams.set('tool', params.tool)
+    if (params?.success !== undefined) searchParams.set('success', String(params.success))
+    if (params?.period) searchParams.set('period', params.period)
+    if (params?.limit !== undefined) searchParams.set('limit', String(params.limit))
+    if (params?.offset !== undefined) searchParams.set('offset', String(params.offset))
+    const query = searchParams.toString()
+    const url = `${API_BASE}/metrics/calls${query ? '?' + query : ''}`
+    const res = await fetch(url)
+    return handleResponse(res)
+  },
+
+  async getToolMetrics(params?: ToolMetricsParams): Promise<ToolMetricsListResponse> {
+    const searchParams = new URLSearchParams()
+    if (params?.backend) searchParams.set('backend', params.backend)
+    if (params?.period) searchParams.set('period', params.period)
+    if (params?.order_by) searchParams.set('order_by', params.order_by)
+    if (params?.order) searchParams.set('order', params.order)
+    if (params?.limit !== undefined) searchParams.set('limit', String(params.limit))
+    const query = searchParams.toString()
+    const url = `${API_BASE}/metrics/by-tool${query ? '?' + query : ''}`
+    const res = await fetch(url)
+    return handleResponse(res)
+  },
+
+  async getTimeSeries(params: TimeSeriesParams): Promise<TimeSeriesResponse> {
+    const searchParams = new URLSearchParams()
+    searchParams.set('period', params.period)
+    if (params.backend) searchParams.set('backend', params.backend)
+    if (params.tool) searchParams.set('tool', params.tool)
+    if (params.granularity) searchParams.set('granularity', params.granularity)
+    const url = `${API_BASE}/metrics/timeseries?${searchParams.toString()}`
     const res = await fetch(url)
     return handleResponse(res)
   },

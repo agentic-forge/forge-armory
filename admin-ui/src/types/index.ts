@@ -49,6 +49,11 @@ export interface ToolCall {
   error_message: string | null
   latency_ms: number
   called_at: string
+  // Request context fields
+  client_ip: string | null
+  request_id: string | null
+  session_id: string | null
+  caller: string | null
 }
 
 export interface Metrics {
@@ -59,6 +64,84 @@ export interface Metrics {
   avg_latency_ms: number
   min_latency_ms: number
   max_latency_ms: number
+}
+
+export interface EnhancedMetrics extends Metrics {
+  p50_latency_ms: number | null
+  p95_latency_ms: number | null
+  p99_latency_ms: number | null
+}
+
+export interface ToolCallListResponse {
+  calls: ToolCall[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface ToolMetrics {
+  tool_name: string
+  backend_name: string
+  total_calls: number
+  success_count: number
+  error_count: number
+  success_rate: number
+  avg_latency_ms: number
+  min_latency_ms: number
+  max_latency_ms: number
+  p95_latency_ms: number | null
+  last_called_at: string | null
+}
+
+export interface ToolMetricsListResponse {
+  tools: ToolMetrics[]
+  total: number
+}
+
+export interface TimeSeriesPoint {
+  timestamp: string
+  total_calls: number
+  success_count: number
+  error_count: number
+  avg_latency_ms: number
+}
+
+export interface TimeSeriesResponse {
+  period: string
+  granularity: string
+  data: TimeSeriesPoint[]
+}
+
+export type TimePeriod = '1h' | '24h' | '7d' | '30d' | 'all'
+
+export interface MetricsParams {
+  backend?: string
+  tool?: string
+  period?: TimePeriod
+}
+
+export interface ToolCallsParams {
+  backend?: string
+  tool?: string
+  success?: boolean
+  period?: TimePeriod
+  limit?: number
+  offset?: number
+}
+
+export interface ToolMetricsParams {
+  backend?: string
+  period?: TimePeriod
+  order_by?: 'total_calls' | 'error_count' | 'avg_latency_ms' | 'p95_latency_ms'
+  order?: 'asc' | 'desc'
+  limit?: number
+}
+
+export interface TimeSeriesParams {
+  period: TimePeriod
+  backend?: string
+  tool?: string
+  granularity?: 'minute' | 'hour' | 'day'
 }
 
 export interface BackendListResponse {

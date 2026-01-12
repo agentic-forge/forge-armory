@@ -8,11 +8,12 @@ from forge_armory.gateway.exceptions import (
     ToolCallError,
     ToolNotFoundError,
 )
-from forge_armory.gateway.manager import BackendManager
+from forge_armory.gateway.manager import BackendManager, RequestContext
 
 __all__ = [
     "BackendConnection",
     "BackendManager",
+    "RequestContext",
     "GatewayError",
     "BackendNotFoundError",
     "BackendConnectionError",
