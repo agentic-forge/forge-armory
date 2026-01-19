@@ -19,6 +19,7 @@ dependencies = [
     "pydantic-settings>=2.0.0",
     "uvicorn>=0.34.0",
     "fastapi>=0.115.0",
+    "toon-python>=0.1.0",  # TOON format support for token-efficient responses
 ]
 
 [project.scripts]
@@ -77,6 +78,7 @@ ignore = [
 "src/forge_armory/cli.py" = ["PLC0415"]
 "src/forge_armory/server.py" = ["PLC0415"]
 "src/forge_armory/db/engine.py" = ["PLC0415"]
+"src/forge_armory/toon/transformer.py" = ["PLC0415"]
 "alembic/*" = ["PLC0415"]
 
 [tool.ruff.lint.isort]

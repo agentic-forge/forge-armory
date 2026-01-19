@@ -552,6 +552,222 @@ class TestEndToEndFlow:
             assert list_resp2.json()["backends"] == []
 
 
+class TestTOONFormat:
+    """Tests for TOON format support via Accept header."""
+
+    def test_toon_format_with_uniform_array(
+        self, seeded_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Test TOON format is used for uniform array data."""
+        app = create_test_app(seeded_session_maker)
+
+        # Mock result with uniform array (ideal for TOON)
+        mock_result = [
+            {"type": "text", "text": '[{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]'}
+        ]
+
+        with patch.object(
+            app.state.backend_manager,
+            "call_tool",
+            new_callable=AsyncMock,
+            return_value=mock_result,
+        ):
+            with TestClient(app) as client:
+                response = client.post(
+                    "/mcp",
+                    json={
+                        "jsonrpc": "2.0",
+                        "method": "tools/call",
+                        "params": {"name": "test__greet", "arguments": {}},
+                        "id": 1,
+                    },
+                    headers={"Accept": "text/toon"},
+                )
+
+            assert response.status_code == 200
+            data = response.json()
+
+            # Should have X-Content-Format header indicating TOON
+            assert response.headers.get("X-Content-Format") == "text/toon"
+
+            # Content should be in TOON format (no JSON braces)
+            content_text = data["result"]["content"][0]["text"]
+            assert "{" not in content_text  # TOON doesn't use braces
+            assert "Alice" in content_text
+            assert "Bob" in content_text
+
+    def test_json_format_default(
+        self, seeded_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Test JSON format is default without Accept header."""
+        app = create_test_app(seeded_session_maker)
+
+        mock_result = [
+            {"type": "text", "text": '[{"id": 1, "name": "Alice"}]'}
+        ]
+
+        with patch.object(
+            app.state.backend_manager,
+            "call_tool",
+            new_callable=AsyncMock,
+            return_value=mock_result,
+        ):
+            with TestClient(app) as client:
+                response = client.post(
+                    "/mcp",
+                    json={
+                        "jsonrpc": "2.0",
+                        "method": "tools/call",
+                        "params": {"name": "test__greet", "arguments": {}},
+                        "id": 1,
+                    },
+                    # No Accept header
+                )
+
+            assert response.status_code == 200
+
+            # Should have JSON content format
+            assert response.headers.get("X-Content-Format") == "application/json"
+
+    def test_toon_honors_explicit_request_for_simple_data(
+        self, seeded_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Test TOON format is used when explicitly requested, even for simple data."""
+        app = create_test_app(seeded_session_maker)
+
+        # Mock result with simple dict (TOON may not save tokens, but client requested it)
+        mock_result = [
+            {"type": "text", "text": '{"temperature": 20, "city": "London"}'}
+        ]
+
+        with patch.object(
+            app.state.backend_manager,
+            "call_tool",
+            new_callable=AsyncMock,
+            return_value=mock_result,
+        ):
+            with TestClient(app) as client:
+                response = client.post(
+                    "/mcp",
+                    json={
+                        "jsonrpc": "2.0",
+                        "method": "tools/call",
+                        "params": {"name": "test__greet", "arguments": {}},
+                        "id": 1,
+                    },
+                    headers={"Accept": "text/toon"},
+                )
+
+            assert response.status_code == 200
+
+            # When TOON is explicitly requested, it's always used (honoring client preference)
+            assert response.headers.get("X-Content-Format") == "text/toon"
+
+    def test_toon_format_mount_endpoint(
+        self, seeded_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Test TOON format works with mount endpoints."""
+        app = create_test_app(seeded_session_maker)
+
+        mock_result = [
+            {"type": "text", "text": '[{"x": 1}, {"x": 2}, {"x": 3}]'}
+        ]
+
+        with patch.object(
+            app.state.backend_manager,
+            "call_tool",
+            new_callable=AsyncMock,
+            return_value=mock_result,
+        ):
+            with TestClient(app) as client:
+                response = client.post(
+                    "/mcp/test",
+                    json={
+                        "jsonrpc": "2.0",
+                        "method": "tools/call",
+                        "params": {"name": "greet", "arguments": {}},
+                        "id": 1,
+                    },
+                    headers={"Accept": "text/toon"},
+                )
+
+            assert response.status_code == 200
+            assert response.headers.get("X-Content-Format") == "text/toon"
+
+    def test_accept_header_with_multiple_types(
+        self, seeded_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Test Accept header with multiple types prefers TOON when present."""
+        app = create_test_app(seeded_session_maker)
+
+        mock_result = [
+            {"type": "text", "text": '[{"a": 1}, {"a": 2}]'}
+        ]
+
+        with patch.object(
+            app.state.backend_manager,
+            "call_tool",
+            new_callable=AsyncMock,
+            return_value=mock_result,
+        ):
+            with TestClient(app) as client:
+                response = client.post(
+                    "/mcp",
+                    json={
+                        "jsonrpc": "2.0",
+                        "method": "tools/call",
+                        "params": {"name": "test__greet", "arguments": {}},
+                        "id": 1,
+                    },
+                    headers={"Accept": "application/json, text/toon, */*"},
+                )
+
+            assert response.status_code == 200
+            # Should use TOON since it's in the Accept header
+            assert response.headers.get("X-Content-Format") == "text/toon"
+
+    def test_nested_array_uses_toon(
+        self, seeded_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Test TOON is used for nested uniform arrays."""
+        app = create_test_app(seeded_session_maker)
+
+        # Mock forecast-like response with nested array
+        mock_result = {
+            "location": "Berlin",
+            "daily": [
+                {"date": "2026-01-19", "temp": 5},
+                {"date": "2026-01-20", "temp": 7},
+            ]
+        }
+
+        with patch.object(
+            app.state.backend_manager,
+            "call_tool",
+            new_callable=AsyncMock,
+            return_value=mock_result,
+        ):
+            with TestClient(app) as client:
+                response = client.post(
+                    "/mcp",
+                    json={
+                        "jsonrpc": "2.0",
+                        "method": "tools/call",
+                        "params": {"name": "test__greet", "arguments": {}},
+                        "id": 1,
+                    },
+                    headers={"Accept": "text/toon"},
+                )
+
+            assert response.status_code == 200
+            assert response.headers.get("X-Content-Format") == "text/toon"
+
+            # Content should be in TOON format with header
+            content_text = data = response.json()["result"]["content"][0]["text"]
+            assert "daily[2]" in content_text  # TOON array marker
+            assert "{date,temp}" in content_text  # TOON field header
+
+
 class TestMetricsIntegration:
     """Tests for metrics across admin API."""
 

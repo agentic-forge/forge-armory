@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from contextlib import asynccontextmanager
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -22,8 +24,53 @@ from forge_armory.db import (
     init_db,
 )
 from forge_armory.gateway import BackendManager, RequestContext
+from forge_armory.toon import should_use_toon, to_json, to_toon
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# Output Format Support
+# ============================================================================
+
+
+class OutputFormat(str, Enum):
+    """Supported output formats for tool results."""
+
+    JSON = "json"
+    TOON = "toon"
+
+
+def get_preferred_format(request: Request) -> OutputFormat:
+    """Extract preferred output format from request headers.
+
+    Checks (in order of precedence):
+    1. X-Prefer-Format: toon → TOON format (for MCP clients - Accept header gets overwritten)
+    2. Accept: text/toon → TOON format (for direct HTTP clients like curl)
+    3. Default → JSON format
+
+    Note: The MCP SDK always overwrites the Accept header with "application/json, text/event-stream",
+    so we need to use X-Prefer-Format for TOON negotiation with MCP clients.
+
+    Args:
+        request: FastAPI request object
+
+    Returns:
+        OutputFormat enum value
+    """
+    # Check custom header first (for MCP clients)
+    prefer_format = request.headers.get("x-prefer-format", "").lower()
+    if prefer_format == "toon":
+        logger.info("TOON format requested via X-Prefer-Format header")
+        return OutputFormat.TOON
+
+    # Fallback to Accept header (for direct HTTP clients)
+    accept = request.headers.get("accept", "")
+    if "text/toon" in accept:
+        logger.info("TOON format requested via Accept header")
+        return OutputFormat.TOON
+
+    return OutputFormat.JSON
 
 
 def get_client_ip(request: Request) -> str | None:
@@ -101,9 +148,14 @@ class MCPGateway:
 
         This is the aggregated endpoint where all tools are available
         with their prefixed names.
+
+        Supports TOON format via Accept header:
+        - Accept: text/toon → Returns tool results in TOON format
+        - Default → Returns tool results in JSON format
         """
         # Extract request context for tracking
         context = get_request_context(request)
+        output_format = get_preferred_format(request)
 
         try:
             body = await request.json()
@@ -117,13 +169,18 @@ class MCPGateway:
         params = body.get("params", {})
         request_id = body.get("id")
 
+        # Track content format for response header
+        content_format = "application/json"
+
         try:
             if method == "initialize":
                 result = await self._handle_initialize(params)
             elif method == "tools/list":
                 result = await self._handle_list_tools()
             elif method == "tools/call":
-                result = await self._handle_call_tool(params, context)
+                result, content_format = await self._handle_call_tool(
+                    params, context, output_format
+                )
             elif method == "ping":
                 result = {}
             else:
@@ -136,7 +193,10 @@ class MCPGateway:
                     },
                 )
 
-            return JSONResponse({"jsonrpc": "2.0", "result": result, "id": request_id})
+            return JSONResponse(
+                {"jsonrpc": "2.0", "result": result, "id": request_id},
+                headers={"X-Content-Format": content_format},
+            )
 
         except Exception as e:
             logger.exception("Error handling MCP request")
@@ -154,9 +214,14 @@ class MCPGateway:
 
         This provides direct access to a specific backend's tools
         without the prefix.
+
+        Supports TOON format via Accept header:
+        - Accept: text/toon → Returns tool results in TOON format
+        - Default → Returns tool results in JSON format
         """
         # Extract request context for tracking
         context = get_request_context(request)
+        output_format = get_preferred_format(request)
 
         try:
             body = await request.json()
@@ -170,13 +235,18 @@ class MCPGateway:
         params = body.get("params", {})
         request_id = body.get("id")
 
+        # Track content format for response header
+        content_format = "application/json"
+
         try:
             if method == "initialize":
                 result = await self._handle_initialize(params)
             elif method == "tools/list":
                 result = await self._handle_list_tools_for_mount(prefix)
             elif method == "tools/call":
-                result = await self._handle_call_tool_for_mount(prefix, params, context)
+                result, content_format = await self._handle_call_tool_for_mount(
+                    prefix, params, context, output_format
+                )
             elif method == "ping":
                 result = {}
             else:
@@ -189,7 +259,10 @@ class MCPGateway:
                     },
                 )
 
-            return JSONResponse({"jsonrpc": "2.0", "result": result, "id": request_id})
+            return JSONResponse(
+                {"jsonrpc": "2.0", "result": result, "id": request_id},
+                headers={"X-Content-Format": content_format},
+            )
 
         except Exception as e:
             logger.exception("Error handling MCP mount request")
@@ -261,21 +334,47 @@ class MCPGateway:
             }
 
     async def _handle_call_tool(
-        self, params: dict[str, Any], context: RequestContext
-    ) -> dict[str, Any]:
-        """Call a tool using its prefixed name."""
+        self,
+        params: dict[str, Any],
+        context: RequestContext,
+        output_format: OutputFormat = OutputFormat.JSON,
+    ) -> tuple[dict[str, Any], str]:
+        """Call a tool using its prefixed name.
+
+        Args:
+            params: MCP call params with name and arguments
+            context: Request context for tracking
+            output_format: Preferred output format
+
+        Returns:
+            Tuple of (MCP result dict, content_type string)
+        """
         tool_name = params.get("name", "")
         arguments = params.get("arguments", {})
 
         result = await self.manager.call_tool(tool_name, arguments, context)
 
-        # Convert result to MCP format
-        return self._format_tool_result(result)
+        # Convert result to MCP format with optional TOON
+        return self._format_tool_result(result, output_format)
 
     async def _handle_call_tool_for_mount(
-        self, prefix: str, params: dict[str, Any], context: RequestContext
-    ) -> dict[str, Any]:
-        """Call a tool on a specific mount using unprefixed name."""
+        self,
+        prefix: str,
+        params: dict[str, Any],
+        context: RequestContext,
+        output_format: OutputFormat = OutputFormat.JSON,
+    ) -> tuple[dict[str, Any], str]:
+        """Call a tool on a specific mount using unprefixed name.
+
+        Args:
+            prefix: Backend prefix
+            params: MCP call params with name and arguments
+            context: Request context for tracking
+            output_format: Preferred output format
+
+        Returns:
+            Tuple of (MCP result dict, content_type string)
+        """
         tool_name = params.get("name", "")
         arguments = params.get("arguments", {})
 
@@ -283,20 +382,115 @@ class MCPGateway:
         prefixed_name = f"{prefix}__{tool_name}"
         result = await self.manager.call_tool(prefixed_name, arguments, context)
 
-        return self._format_tool_result(result)
+        return self._format_tool_result(result, output_format)
 
-    def _format_tool_result(self, result: Any) -> dict[str, Any]:
-        """Format tool result for MCP response."""
-        # Handle different result types
-        if isinstance(result, dict):
-            return {"content": [{"type": "text", "text": str(result)}]}
-        elif isinstance(result, list):
-            # FastMCP often returns list of content items
-            return {"content": result}
+    def _format_tool_result(
+        self,
+        result: Any,
+        output_format: OutputFormat = OutputFormat.JSON,
+    ) -> tuple[dict[str, Any], str]:
+        """Format tool result for MCP response.
+
+        When TOON format is explicitly requested (via Accept header),
+        always attempt TOON conversion regardless of data shape.
+        Falls back to JSON only if TOON conversion fails.
+
+        Args:
+            result: Raw tool result from backend
+            output_format: Preferred output format (JSON or TOON)
+
+        Returns:
+            Tuple of (MCP result dict, content_type string)
+        """
+        # Extract actual data from result
+        data = self._extract_result_data(result)
+
+        # When TOON is explicitly requested, attempt conversion
+        if output_format == OutputFormat.TOON:
+            toon_result = to_toon(data)
+            if toon_result is not None:
+                return (
+                    {"content": [{"type": "text", "text": toon_result}]},
+                    "text/toon",
+                )
+            # Fall through to JSON if TOON conversion fails
+
+        # Default to JSON
+        text = data if isinstance(data, str) else to_json(data)
+
+        return (
+            {"content": [{"type": "text", "text": text}]},
+            "application/json",
+        )
+
+    def _extract_result_data(self, result: Any) -> Any:
+        """Extract the actual data from a tool result.
+
+        Handles various result formats from backends:
+        - CallToolResult: Extract structured_content or text from content
+        - dict: Return as-is
+        - list of MCP content items: Extract text and parse as JSON
+        - str: Try to parse as JSON, otherwise return as-is
+        - other: Return as-is
+
+        Args:
+            result: Raw result from backend
+
+        Returns:
+            Extracted data suitable for formatting
+        """
+        # Handle FastMCP CallToolResult objects
+        # Check for structured_content first (preferred - already parsed)
+        if hasattr(result, 'structured_content') and result.structured_content is not None:
+            return result.structured_content
+
+        # Check for data field (FastMCP stores parsed result here)
+        if hasattr(result, 'data') and result.data is not None:
+            # Data might be a pydantic model, convert to dict if possible
+            if hasattr(result.data, 'model_dump'):
+                return result.data.model_dump()
+            elif hasattr(result.data, '__dict__'):
+                # Fallback for dataclass-like objects
+                return result.data.__dict__
+            return result.data
+
+        # Check for content list with TextContent items
+        if hasattr(result, 'content') and isinstance(result.content, list) and result.content:
+            first = result.content[0]
+            # TextContent has a 'text' attribute
+            if hasattr(first, 'text'):
+                return self._try_parse_json(first.text)
+            # Or it might be a dict
+            elif isinstance(first, dict) and first.get("type") == "text":
+                return self._try_parse_json(first.get("text", ""))
+
+        data = result
+
+        # Handle list of MCP content items (dict format)
+        if isinstance(result, list) and result:
+            first = result[0]
+            if isinstance(first, dict) and first.get("type") == "text":
+                text = first.get("text", "")
+                data = self._try_parse_json(text)
+            else:
+                data = result
+
+        # Handle string results - try to parse as JSON
         elif isinstance(result, str):
-            return {"content": [{"type": "text", "text": result}]}
-        else:
-            return {"content": [{"type": "text", "text": str(result)}]}
+            data = self._try_parse_json(result)
+
+        # Handle dict - return as-is
+        elif isinstance(result, dict):
+            data = result
+
+        return data
+
+    def _try_parse_json(self, text: str) -> Any:
+        """Try to parse text as JSON, return original text on failure."""
+        try:
+            return json.loads(text)
+        except (json.JSONDecodeError, TypeError):
+            return text
 
 
 # ============================================================================
