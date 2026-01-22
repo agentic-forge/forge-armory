@@ -23,6 +23,11 @@ from forge_armory.admin.schemas import (
     ToolListResponse,
     ToolMetricsListResponse,
     ToolMetricsResponse,
+    ToolRagConfigResponse,
+    ToolRagConfigUpdateRequest,
+    ToolRagPreviewResponse,
+    ToolRagRegenerateResponse,
+    ToolRagStatusResponse,
     ToolResponse,
 )
 from forge_armory.db import (
@@ -32,11 +37,13 @@ from forge_armory.db import (
     ToolCallRepository,
     ToolRepository,
 )
-from forge_armory.db.repository import parse_time_period
+from forge_armory.db.repository import ToolRAGConfigRepository, parse_time_period
 from forge_armory.gateway import (
     BackendConnectionError,
     BackendNotFoundError,
 )
+from forge_armory.settings import settings
+from forge_armory.toolrag import render_manifest
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -598,4 +605,122 @@ async def get_timeseries(
             )
             for d in data
         ],
+    )
+
+
+# ============================================================================
+# Tool RAG Routes
+# ============================================================================
+
+
+@router.get("/tool-rag/config", response_model=ToolRagConfigResponse)
+async def get_tool_rag_config(session_maker: SessionMakerDep) -> ToolRagConfigResponse:
+    """Get Tool RAG configuration."""
+    async with session_maker() as session:
+        repo = ToolRAGConfigRepository(session)
+        config = await repo.get_or_create()
+        await session.commit()
+
+        return ToolRagConfigResponse(
+            id=config.id,
+            capability_manifest=config.capability_manifest,
+            tools_hash=config.tools_hash,
+            default_threshold=config.default_threshold,
+            default_max_results=config.default_max_results,
+            updated_at=config.updated_at,
+        )
+
+
+@router.put("/tool-rag/config", response_model=ToolRagConfigResponse)
+async def update_tool_rag_config(
+    data: ToolRagConfigUpdateRequest,
+    session_maker: SessionMakerDep,
+) -> ToolRagConfigResponse:
+    """Update Tool RAG configuration."""
+    async with session_maker() as session:
+        repo = ToolRAGConfigRepository(session)
+        config = await repo.get_or_create()
+
+        # Update fields if provided
+        if data.capability_manifest is not None:
+            config.capability_manifest = data.capability_manifest
+        if data.default_threshold is not None:
+            config.default_threshold = data.default_threshold
+        if data.default_max_results is not None:
+            config.default_max_results = data.default_max_results
+
+        await session.commit()
+
+        return ToolRagConfigResponse(
+            id=config.id,
+            capability_manifest=config.capability_manifest,
+            tools_hash=config.tools_hash,
+            default_threshold=config.default_threshold,
+            default_max_results=config.default_max_results,
+            updated_at=config.updated_at,
+        )
+
+
+@router.get("/tool-rag/status", response_model=ToolRagStatusResponse)
+async def get_tool_rag_status(session_maker: SessionMakerDep) -> ToolRagStatusResponse:
+    """Get Tool RAG embedding status."""
+    async with session_maker() as session:
+        tool_repo = ToolRepository(session)
+        total_tools, indexed_tools = await tool_repo.count_with_embeddings()
+
+    indexing_percentage = (indexed_tools / total_tools * 100) if total_tools > 0 else 0.0
+
+    return ToolRagStatusResponse(
+        enabled=settings.toolrag_enabled,
+        embedding_model=settings.toolrag_embedding_model,
+        total_tools=total_tools,
+        indexed_tools=indexed_tools,
+        indexing_percentage=round(indexing_percentage, 1),
+    )
+
+
+@router.post("/tool-rag/regenerate", response_model=ToolRagRegenerateResponse)
+async def regenerate_embeddings(session_maker: SessionMakerDep) -> ToolRagRegenerateResponse:
+    """Regenerate embeddings for all tools."""
+    if not settings.toolrag_enabled:
+        raise HTTPException(
+            status_code=400,
+            detail="Tool RAG is not enabled. Set ARMORY_TOOLRAG_ENABLED=true to enable.",
+        )
+
+    async with session_maker() as session:
+        tool_repo = ToolRepository(session)
+        tools_processed = await tool_repo.regenerate_all_embeddings()
+        await session.commit()
+
+        # Get updated counts
+        _total_tools, indexed_tools = await tool_repo.count_with_embeddings()
+
+    return ToolRagRegenerateResponse(
+        message=f"Successfully regenerated embeddings for {tools_processed} tools",
+        tools_processed=tools_processed,
+        tools_indexed=indexed_tools,
+    )
+
+
+@router.get("/tool-rag/preview", response_model=ToolRagPreviewResponse)
+async def preview_manifest(session_maker: SessionMakerDep) -> ToolRagPreviewResponse:
+    """Preview the rendered capability manifest.
+
+    Shows both the template and the rendered result with {{TOOL_LIST}} replaced.
+    """
+    async with session_maker() as session:
+        config_repo = ToolRAGConfigRepository(session)
+        config = await config_repo.get_or_create()
+        template = config.capability_manifest
+
+        tool_repo = ToolRepository(session)
+        tools = await tool_repo.list_all()
+
+    rendered = render_manifest(template, tools)
+
+    return ToolRagPreviewResponse(
+        template=template,
+        rendered=rendered,
+        tool_count=len(tools),
     )

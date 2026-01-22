@@ -24,9 +24,36 @@ from forge_armory.db import (
     init_db,
 )
 from forge_armory.gateway import BackendManager, RequestContext
-from forge_armory.toon import should_use_toon, to_json, to_toon
+from forge_armory.toon import to_json, to_toon
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# MCP Mode Support
+# ============================================================================
+
+
+class MCPMode(str, Enum):
+    """MCP endpoint modes."""
+
+    NORMAL = "normal"  # All tools visible to LLM
+    RAG = "rag"  # Only search_tools meta-tool visible
+
+
+def get_mcp_mode(request: Request) -> MCPMode:
+    """Extract MCP mode from query parameters.
+
+    Args:
+        request: FastAPI request object
+
+    Returns:
+        MCPMode.RAG if ?mode=rag, otherwise MCPMode.NORMAL
+    """
+    mode = request.query_params.get("mode", "normal").lower()
+    if mode == "rag":
+        return MCPMode.RAG
+    return MCPMode.NORMAL
 
 
 # ============================================================================
@@ -138,10 +165,18 @@ class MCPGateway:
     Implements the MCP protocol by:
     - Aggregating tools from all backends at /mcp
     - Providing direct access to individual backends at /mcp/{prefix}
+
+    Supports two modes:
+    - NORMAL: All tools visible to LLM (default)
+    - RAG: Only search_tools meta-tool visible, tools discovered via search
     """
+
+    # The search_tools meta-tool name
+    SEARCH_TOOLS_NAME = "search_tools"
 
     def __init__(self, manager: BackendManager) -> None:
         self.manager = manager
+        self._session_maker = manager._session_maker
 
     async def handle_mcp_request(self, request: Request) -> JSONResponse:
         """Handle MCP JSON-RPC requests at /mcp endpoint.
@@ -149,13 +184,18 @@ class MCPGateway:
         This is the aggregated endpoint where all tools are available
         with their prefixed names.
 
+        Supports two modes via query parameter:
+        - /mcp (default): All tools visible
+        - /mcp?mode=rag: Only search_tools meta-tool visible
+
         Supports TOON format via Accept header:
         - Accept: text/toon → Returns tool results in TOON format
         - Default → Returns tool results in JSON format
         """
-        # Extract request context for tracking
+        # Extract request context and mode
         context = get_request_context(request)
         output_format = get_preferred_format(request)
+        mcp_mode = get_mcp_mode(request)
 
         try:
             body = await request.json()
@@ -174,9 +214,12 @@ class MCPGateway:
 
         try:
             if method == "initialize":
-                result = await self._handle_initialize(params)
+                result = await self._handle_initialize(params, mcp_mode)
             elif method == "tools/list":
-                result = await self._handle_list_tools()
+                if mcp_mode == MCPMode.RAG:
+                    result = await self._handle_list_tools_rag()
+                else:
+                    result = await self._handle_list_tools()
             elif method == "tools/call":
                 result, content_format = await self._handle_call_tool(
                     params, context, output_format
@@ -275,7 +318,11 @@ class MCPGateway:
                 },
             )
 
-    async def _handle_initialize(self, params: dict[str, Any]) -> dict[str, Any]:
+    async def _handle_initialize(
+        self,
+        params: dict[str, Any],
+        mode: MCPMode = MCPMode.NORMAL,
+    ) -> dict[str, Any]:
         """Handle initialize request."""
         _ = params  # Reserved for future use (client info, capabilities)
         return {
@@ -286,6 +333,7 @@ class MCPGateway:
             "serverInfo": {
                 "name": "forge-armory",
                 "version": "0.1.0",
+                "mode": mode.value,
             },
         }
 
@@ -301,6 +349,74 @@ class MCPGateway:
                     "inputSchema": tool.input_schema,
                 }
                 for tool in tools
+            ]
+        }
+
+    async def _handle_list_tools_rag(self) -> dict[str, Any]:
+        """List only the search_tools meta-tool (RAG mode).
+
+        In RAG mode, the LLM sees only the search_tools meta-tool.
+        When it calls search_tools with a query, relevant tools are
+        returned and can be called directly.
+        """
+        from forge_armory.db.repository import ToolRAGConfigRepository
+        from forge_armory.toolrag import render_manifest
+
+        # Get capability manifest template and tools
+        async with self._session_maker() as session:
+            config_repo = ToolRAGConfigRepository(session)
+            config = await config_repo.get_or_create()
+            template = config.capability_manifest
+
+            # Get all tools to render the manifest
+            tool_repo = ToolRepository(session)
+            tools = await tool_repo.list_all()
+
+        # Render the manifest template with actual tool list
+        rendered_manifest = render_manifest(template, tools)
+
+        # Build the search_tools meta-tool description
+        base_description = (
+            "Search for available tools by describing what you need. "
+            "Returns a list of matching tools that you can then call directly."
+        )
+
+        description = f"{base_description}\n\n{rendered_manifest}"
+
+        return {
+            "tools": [
+                {
+                    "name": self.SEARCH_TOOLS_NAME,
+                    "description": description,
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": (
+                                    "Natural language description of what tool you need. "
+                                    "Be specific about the task you want to accomplish."
+                                ),
+                            },
+                            "threshold": {
+                                "type": "number",
+                                "description": (
+                                    "Minimum similarity score (0-1). "
+                                    "Lower values return more results. Default: 0.5"
+                                ),
+                                "minimum": 0,
+                                "maximum": 1,
+                            },
+                            "max_results": {
+                                "type": "integer",
+                                "description": "Maximum number of tools to return. Default: 5",
+                                "minimum": 1,
+                                "maximum": 20,
+                            },
+                        },
+                        "required": ["query"],
+                    },
+                }
             ]
         }
 
@@ -341,6 +457,9 @@ class MCPGateway:
     ) -> tuple[dict[str, Any], str]:
         """Call a tool using its prefixed name.
 
+        In RAG mode, the search_tools meta-tool is handled specially.
+        All other tools (including discovered tools) are called normally.
+
         Args:
             params: MCP call params with name and arguments
             context: Request context for tracking
@@ -352,10 +471,74 @@ class MCPGateway:
         tool_name = params.get("name", "")
         arguments = params.get("arguments", {})
 
+        # Handle search_tools meta-tool in RAG mode
+        if tool_name == self.SEARCH_TOOLS_NAME:
+            return await self._handle_search_tools(arguments)
+
+        # Normal tool call - works in both modes
         result = await self.manager.call_tool(tool_name, arguments, context)
 
         # Convert result to MCP format with optional TOON
         return self._format_tool_result(result, output_format)
+
+    async def _handle_search_tools(
+        self,
+        arguments: dict[str, Any],
+    ) -> tuple[dict[str, Any], str]:
+        """Handle the search_tools meta-tool call.
+
+        Searches for tools matching the query using semantic similarity.
+
+        Args:
+            arguments: Tool arguments with query, optional threshold and max_results
+
+        Returns:
+            Tuple of (MCP result dict, content_type string)
+        """
+        from forge_armory.toolrag import (
+            format_search_response,
+            format_search_results,
+            search_tools,
+        )
+
+        query = arguments.get("query", "")
+        threshold = arguments.get("threshold")
+        max_results = arguments.get("max_results")
+
+        if not query:
+            return (
+                {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps({
+                                "error": "Query is required",
+                                "tools": [],
+                                "total_matches": 0,
+                            }),
+                        }
+                    ]
+                },
+                "application/json",
+            )
+
+        # Search for matching tools
+        async with self._session_maker() as session:
+            tools = await search_tools(
+                session,
+                query,
+                threshold=threshold,
+                max_results=max_results,
+            )
+
+        # Format results
+        result = format_search_results(tools, query)
+        response = format_search_response(result)
+
+        return (
+            {"content": [{"type": "text", "text": json.dumps(response)}]},
+            "application/json",
+        )
 
     async def _handle_call_tool_for_mount(
         self,

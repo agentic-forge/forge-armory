@@ -168,3 +168,39 @@ export interface ErrorResponse {
   error: string
   detail?: string
 }
+
+// Tool RAG types
+export interface ToolRagConfig {
+  id: number
+  capability_manifest: string
+  tools_hash: string
+  default_threshold: number
+  default_max_results: number
+  updated_at: string
+}
+
+export interface ToolRagConfigUpdate {
+  capability_manifest?: string
+  default_threshold?: number
+  default_max_results?: number
+}
+
+export interface ToolRagStatus {
+  enabled: boolean
+  embedding_model: string
+  total_tools: number
+  indexed_tools: number
+  indexing_percentage: number
+}
+
+export interface ToolRagRegenerateResponse {
+  message: string
+  tools_processed: number
+  tools_indexed: number
+}
+
+export interface ToolRagPreviewResponse {
+  template: string
+  rendered: string
+  tool_count: number
+}

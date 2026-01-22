@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import selectinload
 
-from forge_armory.db.models import Backend, Tool, ToolCall
+from forge_armory.db.models import Backend, Tool, ToolCall, ToolRAGConfig
 
 if TYPE_CHECKING:
     import uuid
@@ -196,8 +196,18 @@ class ToolRepository:
         self,
         backend: Backend,
         tools: list[ToolInfo],
+        compute_embeddings: bool = True,
     ) -> list[Tool]:
-        """Replace all tools for a backend with new tools."""
+        """Replace all tools for a backend with new tools.
+
+        Args:
+            backend: The backend to refresh tools for
+            tools: List of tool info from the MCP server
+            compute_embeddings: Whether to compute embeddings for Tool RAG
+
+        Returns:
+            List of created Tool objects
+        """
         # Delete existing tools
         stmt = delete(Tool).where(Tool.backend_id == backend.id)
         await self.session.execute(stmt)
@@ -221,7 +231,81 @@ class ToolRepository:
             new_tools.append(tool)
 
         await self.session.flush()
+
+        # Compute embeddings for Tool RAG if enabled
+        if compute_embeddings and new_tools:
+            await self._compute_embeddings(new_tools)
+
         return new_tools
+
+    async def _compute_embeddings(self, tools: list[Tool]) -> None:
+        """Compute and store embeddings for a list of tools.
+
+        This is called automatically during refresh_backend_tools when
+        compute_embeddings=True.
+        """
+        from forge_armory.settings import settings
+
+        if not settings.toolrag_enabled:
+            return
+
+        from forge_armory.toolrag.embedding import create_embedding_text, embedding_service
+
+        # Prepare texts for batch embedding
+        texts = [
+            create_embedding_text(
+                name=tool.prefixed_name,
+                description=tool.description,
+                input_schema=tool.input_schema,
+            )
+            for tool in tools
+        ]
+
+        # Compute embeddings in batch (more efficient)
+        embeddings = embedding_service.embed_batch(texts)
+
+        # Update tools with embeddings
+        for tool, embedding in zip(tools, embeddings, strict=True):
+            tool.embedding = embedding
+
+        await self.session.flush()
+
+    async def list_with_embeddings(self) -> list[Tool]:
+        """List all tools that have embeddings computed."""
+        stmt = (
+            select(Tool)
+            .where(Tool.embedding.isnot(None))
+            .order_by(Tool.prefixed_name)
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def count_with_embeddings(self) -> tuple[int, int]:
+        """Count tools with and without embeddings.
+
+        Returns:
+            Tuple of (total_tools, tools_with_embeddings)
+        """
+        total_stmt = select(func.count(Tool.id))
+        total_result = await self.session.execute(total_stmt)
+        total = total_result.scalar() or 0
+
+        embedded_stmt = select(func.count(Tool.id)).where(Tool.embedding.isnot(None))
+        embedded_result = await self.session.execute(embedded_stmt)
+        embedded = embedded_result.scalar() or 0
+
+        return total, embedded
+
+    async def regenerate_all_embeddings(self) -> int:
+        """Regenerate embeddings for all tools.
+
+        Returns:
+            Number of tools updated
+        """
+        tools = await self.list_all()
+        if tools:
+            await self._compute_embeddings(tools)
+        return len(tools)
 
 
 # ============================================================================
@@ -569,3 +653,62 @@ def parse_time_period(period: str) -> datetime | None:
         return now - timedelta(minutes=minutes)
 
     return None
+
+
+# ============================================================================
+# Tool RAG Config Repository
+# ============================================================================
+
+
+class ToolRAGConfigRepository:
+    """Repository for Tool RAG configuration (singleton table)."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def get(self) -> ToolRAGConfig | None:
+        """Get the Tool RAG configuration singleton."""
+        stmt = select(ToolRAGConfig).where(ToolRAGConfig.id == 1)
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_or_create(self) -> ToolRAGConfig:
+        """Get the config, creating the singleton if it doesn't exist."""
+        config = await self.get()
+        if config is None:
+            config = ToolRAGConfig(
+                id=1,
+                capability_manifest="",
+                tools_hash="",
+            )
+            self.session.add(config)
+            await self.session.flush()
+        return config
+
+    async def update_manifest(self, manifest: str) -> ToolRAGConfig:
+        """Update the capability manifest."""
+        config = await self.get_or_create()
+        config.capability_manifest = manifest
+        await self.session.flush()
+        return config
+
+    async def update_tools_hash(self, tools_hash: str) -> ToolRAGConfig:
+        """Update the tools hash (used to detect when manifest needs refresh)."""
+        config = await self.get_or_create()
+        config.tools_hash = tools_hash
+        await self.session.flush()
+        return config
+
+    async def update_defaults(
+        self,
+        threshold: float | None = None,
+        max_results: int | None = None,
+    ) -> ToolRAGConfig:
+        """Update default search parameters."""
+        config = await self.get_or_create()
+        if threshold is not None:
+            config.default_threshold = threshold
+        if max_results is not None:
+            config.default_max_results = max_results
+        await self.session.flush()
+        return config

@@ -6,6 +6,7 @@ const navItems = [
   { name: 'Backends', icon: 'pi-server', to: '/backends' },
   { name: 'Tools', icon: 'pi-wrench', to: '/tools' },
   { name: 'Metrics', icon: 'pi-chart-bar', to: '/metrics' },
+  { name: 'Tool RAG', icon: 'pi-search', to: '/settings/tool-rag' },
 ]
 </script>
 

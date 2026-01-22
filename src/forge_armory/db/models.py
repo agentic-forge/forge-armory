@@ -9,6 +9,15 @@ from sqlalchemy import Boolean, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSON, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
+try:
+    from pgvector.sqlalchemy import Vector
+except ImportError:
+    # For testing with SQLite (which doesn't support pgvector)
+    Vector = None  # type: ignore[misc, assignment]
+
+# Embedding dimensions for sentence-transformers/all-MiniLM-L6-v2
+EMBEDDING_DIMENSIONS = 384
+
 
 def utcnow() -> datetime:
     """Return current UTC datetime (naive, for TIMESTAMP WITHOUT TIME ZONE)."""
@@ -128,6 +137,14 @@ class Tool(Base):
         nullable=False,
     )
 
+    # Tool RAG: Vector embedding for semantic search
+    # This column is nullable since embeddings are computed asynchronously
+    # Note: For SQLite testing, Vector is None and this column won't be created
+    embedding: Mapped[list[float] | None] = mapped_column(
+        Vector(EMBEDDING_DIMENSIONS) if Vector is not None else None,  # type: ignore[arg-type]
+        nullable=True,
+    )
+
     # Relationships
     backend: Mapped[Backend] = relationship(
         "Backend",
@@ -222,3 +239,46 @@ class ToolCall(Base):
 
     def __repr__(self) -> str:
         return f"<ToolCall(tool_name={self.tool_name!r}, success={self.success})>"
+
+
+class ToolRAGConfig(Base):
+    """Singleton configuration for Tool RAG.
+
+    Stores the capability manifest (brief description of available tools
+    for the search_tools meta-tool) and search defaults.
+    """
+
+    __tablename__ = "tool_rag_config"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+    )
+    capability_manifest: Mapped[str] = mapped_column(
+        Text,
+        default="",
+        nullable=False,
+    )
+    tools_hash: Mapped[str] = mapped_column(
+        String(64),
+        default="",
+        nullable=False,
+    )
+    default_threshold: Mapped[float] = mapped_column(
+        Float,
+        default=0.5,
+        nullable=False,
+    )
+    default_max_results: Mapped[int] = mapped_column(
+        Integer,
+        default=5,
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        default=utcnow,
+        onupdate=utcnow,
+        nullable=False,
+    )
+
+    def __repr__(self) -> str:
+        return f"<ToolRAGConfig(threshold={self.default_threshold})>"

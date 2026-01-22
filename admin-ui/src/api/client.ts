@@ -14,6 +14,11 @@ import type {
   ToolListResponse,
   ToolMetricsListResponse,
   ToolMetricsParams,
+  ToolRagConfig,
+  ToolRagConfigUpdate,
+  ToolRagPreviewResponse,
+  ToolRagRegenerateResponse,
+  ToolRagStatus,
 } from '@/types'
 
 const API_BASE = '/admin'
@@ -177,6 +182,38 @@ export const api = {
     if (params.granularity) searchParams.set('granularity', params.granularity)
     const url = `${API_BASE}/metrics/timeseries?${searchParams.toString()}`
     const res = await fetch(url)
+    return handleResponse(res)
+  },
+
+  // Tool RAG
+  async getToolRagConfig(): Promise<ToolRagConfig> {
+    const res = await fetch(`${API_BASE}/tool-rag/config`)
+    return handleResponse(res)
+  },
+
+  async updateToolRagConfig(data: ToolRagConfigUpdate): Promise<ToolRagConfig> {
+    const res = await fetch(`${API_BASE}/tool-rag/config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    return handleResponse(res)
+  },
+
+  async getToolRagStatus(): Promise<ToolRagStatus> {
+    const res = await fetch(`${API_BASE}/tool-rag/status`)
+    return handleResponse(res)
+  },
+
+  async regenerateEmbeddings(): Promise<ToolRagRegenerateResponse> {
+    const res = await fetch(`${API_BASE}/tool-rag/regenerate`, {
+      method: 'POST',
+    })
+    return handleResponse(res)
+  },
+
+  async previewManifest(): Promise<ToolRagPreviewResponse> {
+    const res = await fetch(`${API_BASE}/tool-rag/preview`)
     return handleResponse(res)
   },
 }

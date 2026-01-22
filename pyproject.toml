@@ -20,6 +20,9 @@ dependencies = [
     "uvicorn>=0.34.0",
     "fastapi>=0.115.0",
     "toon-python>=0.1.0",  # TOON format support for token-efficient responses
+    # Tool RAG dependencies
+    "pgvector>=0.3.0",  # PostgreSQL vector similarity search
+    "sentence-transformers>=3.0.0",  # Local embedding model
 ]
 
 [project.scripts]
@@ -78,7 +81,10 @@ ignore = [
 "src/forge_armory/cli.py" = ["PLC0415"]
 "src/forge_armory/server.py" = ["PLC0415"]
 "src/forge_armory/db/engine.py" = ["PLC0415"]
+"src/forge_armory/db/repository.py" = ["PLC0415"]  # Lazy loading for toolrag
 "src/forge_armory/toon/transformer.py" = ["PLC0415"]
+"src/forge_armory/toolrag/embedding.py" = ["PLC0415"]  # Lazy loading for sentence-transformers
+"src/forge_armory/toolrag/search.py" = ["PLC0415"]  # Lazy loading for optional imports
 "alembic/*" = ["PLC0415"]
 
 [tool.ruff.lint.isort]

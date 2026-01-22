@@ -13,6 +13,7 @@ const pageTitle = computed(() => {
     backends: 'Backends',
     tools: 'Tools',
     metrics: 'Metrics',
+    'tool-rag-settings': 'Tool RAG Settings',
   }
   return titles[route.name as string] || 'Dashboard'
 })

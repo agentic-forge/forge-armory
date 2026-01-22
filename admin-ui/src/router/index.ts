@@ -23,6 +23,11 @@ const router = createRouter({
       name: 'metrics',
       component: () => import('@/views/MetricsView.vue'),
     },
+    {
+      path: '/settings/tool-rag',
+      name: 'tool-rag-settings',
+      component: () => import('@/views/ToolRagSettingsView.vue'),
+    },
   ],
 })
 

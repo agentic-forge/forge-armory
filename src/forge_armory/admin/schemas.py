@@ -234,3 +234,55 @@ class ErrorResponse(BaseModel):
 
     error: str
     detail: str | None = None
+
+
+# ============================================================================
+# Tool RAG Schemas
+# ============================================================================
+
+
+class ToolRagConfigResponse(BaseModel):
+    """Response model for Tool RAG configuration."""
+
+    id: int
+    capability_manifest: str
+    tools_hash: str
+    default_threshold: float
+    default_max_results: int
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ToolRagConfigUpdateRequest(BaseModel):
+    """Request body for updating Tool RAG configuration."""
+
+    capability_manifest: str | None = None
+    default_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    default_max_results: int | None = Field(default=None, ge=1, le=50)
+
+
+class ToolRagStatusResponse(BaseModel):
+    """Response model for Tool RAG status."""
+
+    enabled: bool
+    embedding_model: str
+    total_tools: int
+    indexed_tools: int
+    indexing_percentage: float
+
+
+class ToolRagRegenerateResponse(BaseModel):
+    """Response model for embedding regeneration."""
+
+    message: str
+    tools_processed: int
+    tools_indexed: int
+
+
+class ToolRagPreviewResponse(BaseModel):
+    """Response model for manifest preview."""
+
+    template: str
+    rendered: str
+    tool_count: int

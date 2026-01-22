@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
-from unittest.mock import ANY, AsyncMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -835,3 +835,193 @@ class TestMetricsIntegration:
         assert data["success_count"] == 2
         assert data["error_count"] == 1
         assert data["avg_latency_ms"] == 60.0  # (50 + 30 + 100) / 3
+
+
+class TestToolRAGMode:
+    """Tests for Tool RAG mode (?mode=rag)."""
+
+    def test_rag_mode_tools_list_returns_search_tools_only(
+        self, seeded_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """In RAG mode, tools/list returns only the search_tools meta-tool."""
+        app = create_test_app(seeded_session_maker)
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/mcp?mode=rag",
+                json={
+                    "jsonrpc": "2.0",
+                    "method": "tools/list",
+                    "params": {},
+                    "id": 1,
+                },
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "result" in data
+        tools = data["result"]["tools"]
+
+        # Should have exactly one tool: search_tools
+        assert len(tools) == 1
+        assert tools[0]["name"] == "search_tools"
+        assert "query" in tools[0]["inputSchema"]["properties"]
+        assert "threshold" in tools[0]["inputSchema"]["properties"]
+        assert "max_results" in tools[0]["inputSchema"]["properties"]
+
+    def test_rag_mode_initialize_includes_mode(
+        self, seeded_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """In RAG mode, initialize response includes mode information."""
+        app = create_test_app(seeded_session_maker)
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/mcp?mode=rag",
+                json={
+                    "jsonrpc": "2.0",
+                    "method": "initialize",
+                    "params": {},
+                    "id": 1,
+                },
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["result"]["serverInfo"]["mode"] == "rag"
+
+    def test_normal_mode_tools_list_returns_all_tools(
+        self, seeded_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """In normal mode (default), tools/list returns all backend tools."""
+        app = create_test_app(seeded_session_maker)
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/mcp",  # No mode=rag
+                json={
+                    "jsonrpc": "2.0",
+                    "method": "tools/list",
+                    "params": {},
+                    "id": 1,
+                },
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        tools = data["result"]["tools"]
+
+        # Should have the seeded tools, not search_tools
+        tool_names = [t["name"] for t in tools]
+        assert "test__greet" in tool_names
+        assert "test__add" in tool_names
+        assert "search_tools" not in tool_names
+
+    def test_search_tools_call_with_empty_query(
+        self, seeded_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Calling search_tools with empty query returns error."""
+        app = create_test_app(seeded_session_maker)
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/mcp?mode=rag",
+                json={
+                    "jsonrpc": "2.0",
+                    "method": "tools/call",
+                    "params": {
+                        "name": "search_tools",
+                        "arguments": {"query": ""},
+                    },
+                    "id": 1,
+                },
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        content = data["result"]["content"][0]["text"]
+        import json as json_module
+
+        result = json_module.loads(content)
+        assert result["error"] == "Query is required"
+        assert result["total_matches"] == 0
+
+    def test_search_tools_call_with_query(
+        self, seeded_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Calling search_tools with a query returns formatted results."""
+        app = create_test_app(seeded_session_maker)
+
+        # Mock the search_tools function since SQLite doesn't support pgvector
+        # We need to patch where it's used (inside _handle_search_tools)
+        mock_tools = [
+            MagicMock(
+                prefixed_name="test__greet",
+                description="Greet someone",
+                input_schema={"type": "object"},
+            )
+        ]
+
+        with patch(
+            "forge_armory.toolrag.search_tools",
+            new_callable=AsyncMock,
+            return_value=mock_tools,
+        ):
+            with TestClient(app) as client:
+                response = client.post(
+                    "/mcp?mode=rag",
+                    json={
+                        "jsonrpc": "2.0",
+                        "method": "tools/call",
+                        "params": {
+                            "name": "search_tools",
+                            "arguments": {"query": "greeting"},
+                        },
+                        "id": 1,
+                    },
+                )
+
+        assert response.status_code == 200
+        data = response.json()
+        content = data["result"]["content"][0]["text"]
+        import json as json_module
+
+        result = json_module.loads(content)
+        assert result["query"] == "greeting"
+        assert result["total_matches"] == 1
+        assert len(result["tools"]) == 1
+        assert result["tools"][0]["name"] == "test__greet"
+        assert "instruction" in result
+
+    def test_rag_mode_can_still_call_regular_tools(
+        self, seeded_session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """In RAG mode, regular tools can still be called after discovery."""
+        app = create_test_app(seeded_session_maker)
+
+        # Mock the manager.call_tool to simulate a successful tool call
+        with patch.object(
+            app.state.backend_manager,
+            "call_tool",
+            new_callable=AsyncMock,
+            return_value={"greeting": "Hello, World!"},
+        ):
+            with TestClient(app) as client:
+                response = client.post(
+                    "/mcp?mode=rag",
+                    json={
+                        "jsonrpc": "2.0",
+                        "method": "tools/call",
+                        "params": {
+                            "name": "test__greet",
+                            "arguments": {"name": "World"},
+                        },
+                        "id": 1,
+                    },
+                )
+
+        assert response.status_code == 200
+        data = response.json()
+        # The tool call should succeed, meaning RAG mode doesn't block regular tools
+        assert "result" in data
+        assert "content" in data["result"]

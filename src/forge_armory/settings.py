@@ -21,6 +21,12 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8080
 
+    # Tool RAG settings
+    toolrag_enabled: bool = True
+    toolrag_embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    toolrag_default_threshold: float = 0.5
+    toolrag_default_max_results: int = 5
+
 
 # Global settings instance
 settings = Settings()
