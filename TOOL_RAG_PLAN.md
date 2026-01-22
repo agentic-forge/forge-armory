@@ -1,9 +1,10 @@
 # Tool RAG Implementation Plan
 
-> **Status:** Phases 1-4 Complete, Phase 5 Pending
+> **Status:** Phases 1-4 Complete (Armory implementation done), Phase 5-6 Pending (Orchestrator)
 > **Last Updated:** 2026-01-22
 > **Related:** [blueprint/docs/TOOL_RAG.md](../blueprint/docs/TOOL_RAG.md)
-> **Commit:** 15f3d35
+>
+> **Note:** Tool RAG returns ALL tools matching the similarity threshold. There is no max_results limit.
 
 ## Overview
 
