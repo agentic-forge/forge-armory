@@ -1,8 +1,9 @@
 # Tool RAG Implementation Plan
 
-> **Status:** Draft
-> **Last Updated:** 2026-01-18
+> **Status:** Phases 1-4 Complete, Phase 5 Pending
+> **Last Updated:** 2026-01-22
 > **Related:** [blueprint/docs/TOOL_RAG.md](../blueprint/docs/TOOL_RAG.md)
+> **Commit:** 15f3d35
 
 ## Overview
 
@@ -879,78 +880,104 @@ async def test_retrieval_recall():
 
 ## Implementation Phases
 
-### Phase 1: Database + Embeddings (Foundation)
+### Phase 1: Database + Embeddings (Foundation) - COMPLETE
 
 **Goal:** Add vector storage capability and embedding computation
 
-**Tasks:**
-1. Add `pgvector` to dependencies
-2. Create Alembic migration for:
-   - pgvector extension
-   - embedding column on tools table
-   - tool_rag_config table
-3. Implement `EmbeddingService` class
-4. Add embedding computation to tool refresh flow
-5. Write unit tests for embedding service
+**Completed:**
+- [x] Added `pgvector` and `sentence-transformers` to dependencies
+- [x] Created Alembic migration (`20260120_1000_002_add_tool_rag.py`):
+  - pgvector extension
+  - embedding column on tools table (vector(384))
+  - tool_rag_config table with default_threshold, default_max_results
+- [x] Implemented `EmbeddingService` class with lazy loading
+- [x] Added embedding computation to tool refresh flow in repository
+- [x] Unit tests for embedding service (21 tests)
 
-**Deliverables:**
-- Tools table has embedding column
-- Embeddings computed on tool refresh
-- Basic tests passing
+**Files:**
+- `alembic/versions/20260120_1000_002_add_tool_rag.py`
+- `src/forge_armory/toolrag/embedding.py`
+- `src/forge_armory/db/models.py` (Tool.embedding, ToolRAGConfig)
+- `src/forge_armory/db/repository.py` (_compute_embeddings)
+- `tests/test_toolrag.py`
 
-### Phase 2: Search Service
+### Phase 2: Search Service - COMPLETE
 
 **Goal:** Implement semantic search functionality
 
-**Tasks:**
-1. Implement `search_tools()` function with pgvector
-2. Implement threshold filtering
-3. Create search result formatting
-4. Add repository methods for Tool RAG config
-5. Write unit tests for search
+**Completed:**
+- [x] Implemented `search_tools()` function with pgvector cosine similarity
+- [x] Threshold-based filtering (configurable, default 0.5)
+- [x] Search result formatting for MCP responses
+- [x] Repository methods for ToolRAGConfig CRUD
+- [x] Unit tests for search formatting
 
-**Deliverables:**
-- Semantic search working
-- Configurable threshold and max_results
-- Tests passing
+**Files:**
+- `src/forge_armory/toolrag/search.py`
+- `src/forge_armory/db/repository.py` (ToolRAGConfigRepository)
 
-### Phase 3: MCP Integration
+### Phase 3: MCP Integration - COMPLETE
 
 **Goal:** Expose Tool RAG via MCP protocol
 
-**Tasks:**
-1. Add mode detection to MCP endpoints
-2. Implement RAG mode `tools/list` handler
-3. Implement `search_tools` tool handler
-4. Ensure normal tool calls work in RAG mode
-5. Write integration tests
+**Completed:**
+- [x] Added `MCPMode` enum and `get_mcp_mode()` function
+- [x] Implemented RAG mode `tools/list` handler (returns only search_tools)
+- [x] Implemented `search_tools` meta-tool handler
+- [x] Normal tool calls work in RAG mode
+- [x] Integration tests (6 tests for RAG mode)
 
-**Deliverables:**
-- `/mcp?mode=rag` endpoint working
-- search_tools callable via MCP
-- Full flow tested
+**Files:**
+- `src/forge_armory/server.py` (MCPMode, _handle_list_tools_rag, _handle_search_tools)
+- `tests/test_integration.py` (TestToolRAGMode)
 
-### Phase 4: Admin UI
+### Phase 4: Admin UI - COMPLETE
 
 **Goal:** Management interface for Tool RAG
 
-**Tasks:**
-1. Create Tool RAG settings page
-2. Implement manifest editor with prompt generation
-3. Add embedding status display
-4. Add regenerate embeddings action
-5. Create admin API endpoints
+**Completed:**
+- [x] Tool RAG settings page at `/ui/settings/tool-rag`
+- [x] Capability manifest **template** editor with `{{TOOL_LIST}}` placeholder
+- [x] Preview section showing rendered manifest (what LLMs see)
+- [x] Embedding status display (model, indexed/total, percentage)
+- [x] Regenerate embeddings action with confirmation
+- [x] Configurable threshold and max_results defaults
+- [x] Admin API endpoints:
+  - GET/PUT `/admin/tool-rag/config`
+  - GET `/admin/tool-rag/status`
+  - GET `/admin/tool-rag/preview`
+  - POST `/admin/tool-rag/regenerate`
 
-**Deliverables:**
-- Tool RAG settings page in admin UI
-- Manifest management working
-- Embedding regeneration working
+**Files:**
+- `admin-ui/src/views/ToolRagSettingsView.vue`
+- `admin-ui/src/api/client.ts` (Tool RAG methods)
+- `admin-ui/src/types/index.ts` (ToolRag* types)
+- `admin-ui/src/router/index.ts`, `Sidebar.vue`, `Header.vue`
+- `src/forge_armory/admin/routes.py` (Tool RAG routes)
+- `src/forge_armory/admin/schemas.py` (ToolRag* schemas)
+- `src/forge_armory/toolrag/manifest.py` (template rendering)
 
-### Phase 5: Testing & Documentation
+### Phase 5: Orchestrator Integration - PENDING
+
+**Goal:** Integrate Tool RAG with forge-orchestrator
+
+**Planned Tasks:**
+1. Add RAG mode toggle to orchestrator configuration
+2. Modify tool discovery to use search_tools when in RAG mode
+3. Handle dynamic tool loading from search results
+4. Update system prompts for RAG mode behavior
+5. Test end-to-end with forge-ui
+
+**Files to modify:**
+- `forge-orchestrator/src/*/agent.py` or similar
+- `forge-orchestrator/src/*/config.py`
+- `forge-ui/src/*` (RAG mode toggle in settings)
+
+### Phase 6: Testing & Documentation - PENDING
 
 **Goal:** Production readiness
 
-**Tasks:**
+**Planned Tasks:**
 1. Add accuracy benchmarks
 2. Performance testing (search latency)
 3. Update API documentation
