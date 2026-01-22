@@ -1,6 +1,6 @@
 # Tool RAG Implementation Plan
 
-> **Status:** Phases 1-4 Complete (Armory implementation done), Phase 5-6 Pending (Orchestrator)
+> **Status:** Phases 1-5 Complete (Armory + Orchestrator done), Phase 6 Pending (Testing & Docs)
 > **Last Updated:** 2026-01-22
 > **Related:** [blueprint/docs/TOOL_RAG.md](../blueprint/docs/TOOL_RAG.md)
 >
@@ -957,21 +957,25 @@ async def test_retrieval_recall():
 - `src/forge_armory/admin/schemas.py` (ToolRag* schemas)
 - `src/forge_armory/toolrag/manifest.py` (template rendering)
 
-### Phase 5: Orchestrator Integration - PENDING
+### Phase 5: Orchestrator Integration - COMPLETE
 
 **Goal:** Integrate Tool RAG with forge-orchestrator
 
-**Planned Tasks:**
-1. Add RAG mode toggle to orchestrator configuration
-2. Modify tool discovery to use search_tools when in RAG mode
-3. Handle dynamic tool loading from search results
-4. Update system prompts for RAG mode behavior
-5. Test end-to-end with forge-ui
+**Design:** Stateless per-request approach - no server-side configuration. Each request specifies whether to use RAG mode.
 
-**Files to modify:**
-- `forge-orchestrator/src/*/agent.py` or similar
-- `forge-orchestrator/src/*/config.py`
-- `forge-ui/src/*` (RAG mode toggle in settings)
+**Completed:**
+- [x] Added `_get_armory_url()` helper to construct URL with `?mode=rag` parameter
+- [x] Modified `run_stream()` to use RAG mode URL when `use_tool_rag_mode=true`
+- [x] Added `TOOL_RAG_INSTRUCTIONS` system prompt for RAG mode behavior
+- [x] Added `use_tool_rag_mode` parameter to `/chat/stream` API endpoint
+- [x] Updated forge-ui with Tool RAG toggle in ChatInput component (Advanced view)
+
+**Files modified:**
+- `forge-orchestrator/src/forge_orchestrator/orchestrator.py` - `_get_armory_url()`, RAG instructions, request handling
+- `forge-orchestrator/src/forge_orchestrator/server.py` - API parameter `use_tool_rag_mode: bool | None`
+- `forge-ui/src/types/conversation.ts` - Added `useToolRag` to AdvancedViewSettings
+- `forge-ui/src/composables/useConversation.ts` - Default value, API request body
+- `forge-ui/src/components/ChatInput.vue` - RAG toggle button with blue accent
 
 ### Phase 6: Testing & Documentation - PENDING
 
