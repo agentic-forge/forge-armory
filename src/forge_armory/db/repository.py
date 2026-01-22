@@ -702,13 +702,10 @@ class ToolRAGConfigRepository:
     async def update_defaults(
         self,
         threshold: float | None = None,
-        max_results: int | None = None,
     ) -> ToolRAGConfig:
         """Update default search parameters."""
         config = await self.get_or_create()
         if threshold is not None:
             config.default_threshold = threshold
-        if max_results is not None:
-            config.default_max_results = max_results
         await self.session.flush()
         return config

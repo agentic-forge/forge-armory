@@ -269,11 +269,6 @@ class ToolRAGConfig(Base):
         default=0.5,
         nullable=False,
     )
-    default_max_results: Mapped[int] = mapped_column(
-        Integer,
-        default=5,
-        nullable=False,
-    )
     updated_at: Mapped[datetime] = mapped_column(
         default=utcnow,
         onupdate=utcnow,

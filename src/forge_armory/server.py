@@ -407,12 +407,6 @@ class MCPGateway:
                                 "minimum": 0,
                                 "maximum": 1,
                             },
-                            "max_results": {
-                                "type": "integer",
-                                "description": "Maximum number of tools to return. Default: 5",
-                                "minimum": 1,
-                                "maximum": 20,
-                            },
                         },
                         "required": ["query"],
                     },
@@ -488,9 +482,10 @@ class MCPGateway:
         """Handle the search_tools meta-tool call.
 
         Searches for tools matching the query using semantic similarity.
+        Returns all tools meeting the similarity threshold.
 
         Args:
-            arguments: Tool arguments with query, optional threshold and max_results
+            arguments: Tool arguments with query and optional threshold
 
         Returns:
             Tuple of (MCP result dict, content_type string)
@@ -503,7 +498,6 @@ class MCPGateway:
 
         query = arguments.get("query", "")
         threshold = arguments.get("threshold")
-        max_results = arguments.get("max_results")
 
         if not query:
             return (
@@ -522,13 +516,12 @@ class MCPGateway:
                 "application/json",
             )
 
-        # Search for matching tools
+        # Search for matching tools (returns all matching threshold)
         async with self._session_maker() as session:
             tools = await search_tools(
                 session,
                 query,
                 threshold=threshold,
-                max_results=max_results,
             )
 
         # Format results

@@ -394,15 +394,15 @@ async def search_tools(
     session: AsyncSession,
     query: str,
     threshold: float = 0.5,
-    max_results: int = 5,
 ) -> list[Tool]:
     """Search for tools matching a query using semantic similarity.
+
+    Returns ALL tools meeting the threshold, ordered by relevance.
 
     Args:
         session: Database session
         query: Natural language query
         threshold: Minimum cosine similarity (0-1). Default 0.5
-        max_results: Maximum number of tools to return. Default 5
 
     Returns:
         List of matching Tool objects, ordered by relevance
@@ -416,6 +416,7 @@ async def search_tools(
 
     # Query with vector similarity
     # Using raw SQL for pgvector operators
+    # Returns ALL tools meeting threshold
     stmt = (
         select(Tool)
         .where(Tool.embedding.isnot(None))
@@ -423,7 +424,6 @@ async def search_tools(
             text("embedding <=> :query_embedding < :max_distance")
         )
         .order_by(text("embedding <=> :query_embedding"))
-        .limit(max_results)
     )
 
     result = await session.execute(
@@ -446,9 +446,11 @@ async def search_tools_v2(
     session: AsyncSession,
     query: str,
     threshold: float = 0.5,
-    max_results: int = 5,
 ) -> list[Tool]:
-    """Search using pgvector's SQLAlchemy operators."""
+    """Search using pgvector's SQLAlchemy operators.
+
+    Returns ALL tools meeting the threshold.
+    """
     query_embedding = embedding_service.embed(query)
 
     # pgvector provides cosine_distance method
@@ -457,7 +459,6 @@ async def search_tools_v2(
         .where(Tool.embedding.isnot(None))
         .where(Tool.embedding.cosine_distance(query_embedding) < (1 - threshold))
         .order_by(Tool.embedding.cosine_distance(query_embedding))
-        .limit(max_results)
     )
 
     result = await session.execute(stmt)
@@ -561,13 +562,8 @@ async def _handle_list_tools_rag(self) -> dict[str, Any]:
                 },
                 "threshold": {
                     "type": "number",
-                    "description": "Minimum relevance score (0-1). Default: 0.5",
+                    "description": "Minimum relevance score (0-1). Default: 0.5. All tools meeting threshold are returned.",
                     "default": 0.5
-                },
-                "max_results": {
-                    "type": "integer",
-                    "description": "Maximum number of tools to return. Default: 5",
-                    "default": 5
                 }
             },
             "required": ["query"]
@@ -613,10 +609,12 @@ async def _handle_call_tool(
 
 
 async def _handle_search_tools(self, arguments: dict[str, Any]) -> dict[str, Any]:
-    """Handle the search_tools meta-tool."""
+    """Handle the search_tools meta-tool.
+
+    Returns all tools meeting the similarity threshold.
+    """
     query = arguments.get("query", "")
     threshold = arguments.get("threshold", 0.5)
-    max_results = arguments.get("max_results", 5)
 
     if not query:
         return {
@@ -627,7 +625,7 @@ async def _handle_search_tools(self, arguments: dict[str, Any]) -> dict[str, Any
         }
 
     async with self.manager._session_maker() as session:
-        tools = await search_tools(session, query, threshold, max_results)
+        tools = await search_tools(session, query, threshold)
 
     result = format_search_results(tools, query)
 
@@ -662,7 +660,7 @@ async def _handle_search_tools(self, arguments: dict[str, Any]) -> dict[str, Any
 
 3. **Configuration Section**
    - Default threshold slider (0.0 - 1.0)
-   - Default max_results input
+   - All tools matching threshold are returned
 
 #### Generate Prompt Function
 
@@ -858,12 +856,13 @@ BENCHMARK_QUERIES = [
 ]
 
 async def test_retrieval_recall():
-    """Measure recall@5 - how often expected tools appear in top 5."""
+    """Measure recall - how often expected tools appear in results."""
     hits = 0
     total = 0
 
     for case in BENCHMARK_QUERIES:
-        results = await search_tools(session, case["query"], max_results=5)
+        # Returns all tools meeting threshold
+        results = await search_tools(session, case["query"])
         result_names = [t.prefixed_name for t in results]
 
         for expected in case["expected_tools"]:
@@ -872,7 +871,7 @@ async def test_retrieval_recall():
                 hits += 1
 
     recall = hits / total
-    print(f"Recall@5: {recall:.2%}")
+    print(f"Recall: {recall:.2%}")
     assert recall >= 0.7  # Minimum acceptable recall
 ```
 
@@ -889,7 +888,7 @@ async def test_retrieval_recall():
 - [x] Created Alembic migration (`20260120_1000_002_add_tool_rag.py`):
   - pgvector extension
   - embedding column on tools table (vector(384))
-  - tool_rag_config table with default_threshold, default_max_results
+  - tool_rag_config table with default_threshold
 - [x] Implemented `EmbeddingService` class with lazy loading
 - [x] Added embedding computation to tool refresh flow in repository
 - [x] Unit tests for embedding service (21 tests)
@@ -941,7 +940,7 @@ async def test_retrieval_recall():
 - [x] Preview section showing rendered manifest (what LLMs see)
 - [x] Embedding status display (model, indexed/total, percentage)
 - [x] Regenerate embeddings action with confirmation
-- [x] Configurable threshold and max_results defaults
+- [x] Configurable threshold default (all tools meeting threshold are returned)
 - [x] Admin API endpoints:
   - GET/PUT `/admin/tool-rag/config`
   - GET `/admin/tool-rag/status`
@@ -1034,7 +1033,6 @@ class Settings(BaseSettings):
     # Tool RAG settings
     toolrag_enabled: bool = True
     toolrag_default_threshold: float = 0.5
-    toolrag_default_max_results: int = 5
     toolrag_embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
 ```
 

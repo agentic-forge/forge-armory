@@ -34,14 +34,12 @@ const showPreview = ref(false)
 
 // Form state
 const formThreshold = ref(0.5)
-const formMaxResults = ref(5)
 const formManifest = ref('')
 
 const hasChanges = computed(() => {
   if (!config.value) return false
   return (
     formThreshold.value !== config.value.default_threshold ||
-    formMaxResults.value !== config.value.default_max_results ||
     formManifest.value !== config.value.capability_manifest
   )
 })
@@ -58,7 +56,6 @@ async function loadData() {
 
     // Initialize form state
     formThreshold.value = configResponse.default_threshold
-    formMaxResults.value = configResponse.default_max_results
     formManifest.value = configResponse.capability_manifest
   } catch (error) {
     toast.add({
@@ -77,7 +74,6 @@ async function saveSettings() {
   try {
     const updated = await api.updateToolRagConfig({
       default_threshold: formThreshold.value,
-      default_max_results: formMaxResults.value,
       capability_manifest: formManifest.value,
     })
     config.value = updated
@@ -182,7 +178,6 @@ function insertPlaceholder() {
 function resetForm() {
   if (config.value) {
     formThreshold.value = config.value.default_threshold
-    formMaxResults.value = config.value.default_max_results
     formManifest.value = config.value.capability_manifest
   }
   showPreview.value = false
@@ -298,21 +293,7 @@ onMounted(loadData)
           />
           <small class="form-hint">
             Minimum similarity score (0-1) for tool matches. Higher values = stricter matching.
-            Default: 0.5
-          </small>
-        </div>
-
-        <div class="form-field">
-          <label class="form-label" for="maxResults">Max Results</label>
-          <InputNumber
-            id="maxResults"
-            v-model="formMaxResults"
-            :min="1"
-            :max="50"
-            style="width: 100%"
-          />
-          <small class="form-hint">
-            Maximum number of tools returned per search. Default: 5
+            All tools meeting the threshold are returned. Default: 0.5
           </small>
         </div>
       </template>

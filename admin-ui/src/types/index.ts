@@ -175,14 +175,12 @@ export interface ToolRagConfig {
   capability_manifest: string
   tools_hash: string
   default_threshold: number
-  default_max_results: number
   updated_at: string
 }
 
 export interface ToolRagConfigUpdate {
   capability_manifest?: string
   default_threshold?: number
-  default_max_results?: number
 }
 
 export interface ToolRagStatus {

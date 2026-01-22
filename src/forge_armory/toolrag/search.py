@@ -34,18 +34,17 @@ async def search_tools(
     session: AsyncSession,
     query: str,
     threshold: float | None = None,
-    max_results: int | None = None,
 ) -> list[Tool]:
     """Search for tools matching a query using semantic similarity.
 
     Uses pgvector cosine distance to find tools with descriptions
-    semantically similar to the query.
+    semantically similar to the query. Returns ALL tools that meet
+    the similarity threshold.
 
     Args:
         session: Database session
         query: Natural language query describing what tool is needed
         threshold: Minimum similarity score (0-1). Default from settings.
-        max_results: Maximum tools to return. Default from settings.
 
     Returns:
         List of matching Tool objects, ordered by relevance (most similar first)
@@ -53,11 +52,9 @@ async def search_tools(
     if not query or not query.strip():
         return []
 
-    # Use defaults from settings if not provided
+    # Use default threshold from settings if not provided
     if threshold is None:
         threshold = settings.toolrag_default_threshold
-    if max_results is None:
-        max_results = settings.toolrag_default_max_results
 
     # Compute query embedding
     query_embedding = embedding_service.embed(query)
@@ -69,6 +66,7 @@ async def search_tools(
 
     # Query using pgvector cosine distance operator (<=>)
     # The operator returns distance, not similarity
+    # Returns ALL tools meeting the threshold, ordered by relevance
     stmt = (
         select(Tool)
         .where(Tool.embedding.isnot(None))
@@ -76,7 +74,6 @@ async def search_tools(
             text("tools.embedding <=> :query_embedding <= :max_distance")
         )
         .order_by(text("tools.embedding <=> :query_embedding"))
-        .limit(max_results)
     )
 
     result = await session.execute(

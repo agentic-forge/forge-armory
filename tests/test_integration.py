@@ -867,7 +867,6 @@ class TestToolRAGMode:
         assert tools[0]["name"] == "search_tools"
         assert "query" in tools[0]["inputSchema"]["properties"]
         assert "threshold" in tools[0]["inputSchema"]["properties"]
-        assert "max_results" in tools[0]["inputSchema"]["properties"]
 
     def test_rag_mode_initialize_includes_mode(
         self, seeded_session_maker: async_sessionmaker[AsyncSession]

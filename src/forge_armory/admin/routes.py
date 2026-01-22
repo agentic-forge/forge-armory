@@ -626,7 +626,6 @@ async def get_tool_rag_config(session_maker: SessionMakerDep) -> ToolRagConfigRe
             capability_manifest=config.capability_manifest,
             tools_hash=config.tools_hash,
             default_threshold=config.default_threshold,
-            default_max_results=config.default_max_results,
             updated_at=config.updated_at,
         )
 
@@ -646,8 +645,6 @@ async def update_tool_rag_config(
             config.capability_manifest = data.capability_manifest
         if data.default_threshold is not None:
             config.default_threshold = data.default_threshold
-        if data.default_max_results is not None:
-            config.default_max_results = data.default_max_results
 
         await session.commit()
 
@@ -656,7 +653,6 @@ async def update_tool_rag_config(
             capability_manifest=config.capability_manifest,
             tools_hash=config.tools_hash,
             default_threshold=config.default_threshold,
-            default_max_results=config.default_max_results,
             updated_at=config.updated_at,
         )
 
