@@ -11,9 +11,11 @@
 | 5 | CLI commands | ✓ COMPLETE | 3 |
 | 6 | Gateway server | ✓ COMPLETE | - |
 | 7 | Integration tests | ✓ COMPLETE | 17 |
-| **8** | **Documentation** | **← NEXT** | - |
+| 8 | Documentation | Pending | - |
+| **9** | **Tool RAG (Phases 1-4)** | **✓ COMPLETE** | **27** |
+| **10** | **Tool RAG (Phase 5 - Orchestrator)** | **← NEXT** | - |
 
-**Total: 77 tests passing** | Type checking: 0 errors | Linting: Clean
+**Total: 144 tests passing** | Type checking: 0 errors | Linting: Clean
 
 ---
 
@@ -24,6 +26,16 @@ Phases 1-7 are complete. The gateway is fully functional with:
 - Admin REST API (`/admin/*`)
 - CLI for backend management
 - Comprehensive test coverage
+
+## Tool RAG Feature 🔍
+
+Tool RAG (Phases 9-10) adds semantic tool discovery:
+- **RAG mode** (`/mcp?mode=rag`): Returns only `search_tools` meta-tool
+- **Semantic search**: pgvector + sentence-transformers (all-MiniLM-L6-v2)
+- **Admin UI**: Settings page at `/ui/settings/tool-rag`
+- **Manifest templates**: `{{TOOL_LIST}}` placeholder auto-populated
+
+See [TOOL_RAG_PLAN.md](TOOL_RAG_PLAN.md) for full implementation details.
 
 ---
 
@@ -78,25 +90,35 @@ forge-armory/
 │   ├── db/
 │   │   ├── __init__.py      # Exports all DB components
 │   │   ├── engine.py        # Async SQLAlchemy engine
-│   │   ├── models.py        # Backend, Tool, ToolCall ORM models
+│   │   ├── models.py        # Backend, Tool, ToolCall, ToolRAGConfig models
 │   │   └── repository.py    # Repository pattern + Pydantic schemas
 │   ├── gateway/
 │   │   ├── __init__.py      # Exports gateway components
 │   │   ├── connection.py    # BackendConnection (MCP client wrapper)
 │   │   ├── manager.py       # BackendManager (connection pool)
 │   │   └── exceptions.py    # Gateway exceptions
-│   └── admin/
-│       ├── __init__.py      # Exports admin components
-│       ├── routes.py        # Starlette routes for /admin/*
-│       └── schemas.py       # Pydantic request/response models
+│   ├── admin/
+│   │   ├── __init__.py      # Exports admin components
+│   │   ├── routes.py        # Starlette routes for /admin/*
+│   │   └── schemas.py       # Pydantic request/response models
+│   └── toolrag/             # Tool RAG (semantic search)
+│       ├── __init__.py      # Exports toolrag components
+│       ├── embedding.py     # EmbeddingService (sentence-transformers)
+│       ├── search.py        # search_tools(), result formatting
+│       └── manifest.py      # Template rendering with {{TOOL_LIST}}
+├── admin-ui/                # Vue.js admin interface
+│   └── src/views/ToolRagSettingsView.vue
 ├── tests/
 │   ├── conftest.py          # Shared fixtures
 │   ├── test_cli.py          # CLI tests (3)
 │   ├── test_db.py           # Database tests (17)
 │   ├── test_gateway.py      # Gateway tests (18)
-│   └── test_admin.py        # Admin API tests (17)
+│   ├── test_admin.py        # Admin API tests (17)
+│   ├── test_integration.py  # Integration tests incl. Tool RAG (29)
+│   └── test_toolrag.py      # Tool RAG unit tests (21)
 ├── alembic/                 # Database migrations
 ├── pyproject.toml           # Dependencies & config
+├── TOOL_RAG_PLAN.md         # Tool RAG implementation details
 └── README.md
 ```
 
@@ -133,13 +155,14 @@ armory --version                       # Show version
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/mcp` | POST | Aggregated endpoint (all tools with prefixes) |
+| `/mcp?mode=rag` | POST | RAG mode (only search_tools meta-tool) |
 | `/mcp/{prefix}` | POST | Direct backend access (tools without prefix) |
 | `/.well-known/mcp.json` | GET | Discovery metadata |
 
 **MCP Methods Supported:**
 - `initialize` - Server capabilities
-- `tools/list` - List available tools
-- `tools/call` - Call a tool
+- `tools/list` - List available tools (or just search_tools in RAG mode)
+- `tools/call` - Call a tool (including search_tools in RAG mode)
 - `ping` - Health check
 
 ### Admin API
@@ -156,6 +179,11 @@ armory --version                       # Show version
 | `/admin/backends/{name}/disable` | POST | Disable backend |
 | `/admin/tools` | GET | List all tools |
 | `/admin/metrics` | GET | Get call metrics |
+| `/admin/tool-rag/config` | GET | Get Tool RAG config |
+| `/admin/tool-rag/config` | PUT | Update Tool RAG config |
+| `/admin/tool-rag/status` | GET | Get embedding status |
+| `/admin/tool-rag/preview` | GET | Preview rendered manifest |
+| `/admin/tool-rag/regenerate` | POST | Regenerate all embeddings |
 
 ---
 
