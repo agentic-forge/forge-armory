@@ -9,6 +9,7 @@ Implements the MCP Streamable HTTP protocol session handshake:
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from dataclasses import dataclass
@@ -20,6 +21,49 @@ if TYPE_CHECKING:
     from forge_armory.db import Backend
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_response(response: httpx.Response) -> dict[str, Any]:
+    """Parse response body, handling both JSON and SSE formats.
+
+    MCP Streamable HTTP servers may return responses as:
+    - Direct JSON (content-type: application/json)
+    - SSE format (content-type: text/event-stream):
+      event: message
+      data: {"jsonrpc":"2.0",...}
+
+    Args:
+        response: HTTP response to parse
+
+    Returns:
+        Parsed JSON-RPC response
+
+    Raises:
+        ValueError: If response cannot be parsed
+    """
+    content_type = response.headers.get("content-type", "")
+
+    # Direct JSON response
+    if "application/json" in content_type:
+        return response.json()
+
+    # SSE format - extract JSON from data: line
+    if "text/event-stream" in content_type:
+        text = response.text
+        for line in text.split("\n"):
+            line = line.strip()
+            if line.startswith("data:"):
+                json_str = line[5:].strip()  # Remove "data:" prefix
+                if json_str:
+                    return json.loads(json_str)
+
+        raise ValueError(f"No data line found in SSE response: {text[:200]}")
+
+    # Fallback: try to parse as JSON
+    try:
+        return response.json()
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Cannot parse response (content-type: {content_type}): {e}")
 
 # MCP protocol version
 MCP_PROTOCOL_VERSION = "2024-11-05"
@@ -218,12 +262,14 @@ async def call_tool_with_session(
             timeout=backend.timeout,
         )
         response.raise_for_status()
-        return response.json()
+        return _parse_response(response)
+    except ValueError as e:
+        raise MCPSessionError(f"Failed to parse tool call response: {e}") from e
     except httpx.HTTPStatusError as e:
         # Check if this is a session error
         if e.response.status_code == 400:
             try:
-                error_data = e.response.json()
+                error_data = _parse_response(e.response)
                 error_str = str(error_data).lower()
                 if "session" in error_str or "invalid" in error_str:
                     raise MCPSessionError(
@@ -276,7 +322,9 @@ async def list_tools_with_session(
             timeout=backend.timeout,
         )
         response.raise_for_status()
-        return response.json()
+        return _parse_response(response)
+    except ValueError as e:
+        raise MCPSessionError(f"Failed to parse tools/list response: {e}") from e
     except httpx.HTTPStatusError as e:
         raise MCPSessionError(
             f"tools/list failed with status {e.response.status_code}: {e.response.text}"
