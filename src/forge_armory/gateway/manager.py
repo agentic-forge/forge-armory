@@ -81,10 +81,25 @@ class BackendManager:
         logger.info("All backends disconnected")
 
     async def _connect_backend(self, backend: Backend) -> BackendConnection:
-        """Internal: Create connection and add to active connections."""
+        """Internal: Create connection and add to active connections.
+
+        After connecting, persists session state (session_id, requires_session)
+        back to the database.
+        """
         conn = BackendConnection(backend)
         await conn.connect()
         self._connections[backend.name] = conn
+
+        # Persist session state to database
+        async with self._session_maker() as session:
+            repo = BackendRepository(session)
+            db_backend = await repo.get_by_name(backend.name)
+            if db_backend:
+                db_backend.session_id = conn.session_id
+                db_backend.session_initialized = True
+                db_backend.requires_session = conn.requires_session
+                await session.commit()
+
         return conn
 
     async def add_backend(self, backend: Backend) -> list[ToolInfo]:
@@ -112,10 +127,23 @@ class BackendManager:
         return tools
 
     async def remove_backend(self, name: str) -> None:
-        """Disconnect and remove a backend."""
+        """Disconnect and remove a backend.
+
+        Clears session state in the database when disconnecting.
+        """
         if name in self._connections:
             await self._connections[name].disconnect()
             del self._connections[name]
+
+            # Clear session state in database
+            async with self._session_maker() as session:
+                repo = BackendRepository(session)
+                db_backend = await repo.get_by_name(name)
+                if db_backend:
+                    db_backend.session_id = None
+                    db_backend.session_initialized = False
+                    await session.commit()
+
             logger.info("Removed backend: %s", name)
 
     async def refresh_backend(self, name: str) -> list[ToolInfo]:

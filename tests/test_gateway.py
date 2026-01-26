@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -24,6 +24,7 @@ from forge_armory.gateway import (
     ToolCallError,
     ToolNotFoundError,
 )
+from forge_armory.gateway.session import MCPSessionError, SessionState
 
 
 @pytest.fixture
@@ -98,21 +99,29 @@ class TestBackendConnection:
         assert conn.is_connected is False
 
     async def test_connect_with_url(self, mock_backend: Backend) -> None:
-        """Connection can connect using URL."""
+        """Connection can connect using URL and initialize session."""
         conn = BackendConnection(mock_backend)
 
-        with patch("forge_armory.gateway.connection.Client") as mock_client_class:
+        with (
+            patch("forge_armory.gateway.connection.httpx.AsyncClient") as mock_client_class,
+            patch(
+                "forge_armory.gateway.connection.initialize_session", new_callable=AsyncMock
+            ) as mock_init_session,
+        ):
             mock_client = AsyncMock()
             mock_client_class.return_value = mock_client
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=None)
-            mock_client.ping = AsyncMock()
+            mock_init_session.return_value = SessionState(
+                session_id="test-session-123",
+                initialized=True,
+                requires_session=True,
+            )
 
             await conn.connect()
 
             assert conn.is_connected is True
-            mock_client_class.assert_called_once_with("http://localhost:8000/mcp")
-            mock_client.ping.assert_called_once()
+            assert conn.session_id == "test-session-123"
+            assert conn.requires_session is True
+            mock_init_session.assert_called_once()
 
     async def test_connect_no_url_raises(self) -> None:
         """Connection raises if backend has no url configured."""
@@ -126,12 +135,15 @@ class TestBackendConnection:
         """Connection raises on connection failure."""
         conn = BackendConnection(mock_backend)
 
-        with patch("forge_armory.gateway.connection.Client") as mock_client_class:
+        with (
+            patch("forge_armory.gateway.connection.httpx.AsyncClient") as mock_client_class,
+            patch(
+                "forge_armory.gateway.connection.initialize_session", new_callable=AsyncMock
+            ) as mock_init_session,
+        ):
             mock_client = AsyncMock()
             mock_client_class.return_value = mock_client
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=None)
-            mock_client.ping = AsyncMock(side_effect=ConnectionError("Connection refused"))
+            mock_init_session.side_effect = MCPSessionError("Connection refused")
 
             with pytest.raises(BackendConnectionError, match="Failed to connect"):
                 await conn.connect()
@@ -142,36 +154,58 @@ class TestBackendConnection:
         """Connection can disconnect."""
         conn = BackendConnection(mock_backend)
 
-        with patch("forge_armory.gateway.connection.Client") as mock_client_class:
+        with (
+            patch("forge_armory.gateway.connection.httpx.AsyncClient") as mock_client_class,
+            patch(
+                "forge_armory.gateway.connection.initialize_session", new_callable=AsyncMock
+            ) as mock_init_session,
+        ):
             mock_client = AsyncMock()
             mock_client_class.return_value = mock_client
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=None)
-            mock_client.ping = AsyncMock()
+            mock_init_session.return_value = SessionState(
+                session_id="test-session", initialized=True, requires_session=False
+            )
 
             await conn.connect()
             assert conn.is_connected is True
 
             await conn.disconnect()
             assert conn.is_connected is False
+            assert conn.session_id is None
 
     async def test_list_tools(self, mock_backend: Backend) -> None:
         """Connection can list tools from backend."""
         conn = BackendConnection(mock_backend)
 
-        with patch("forge_armory.gateway.connection.Client") as mock_client_class:
+        with (
+            patch("forge_armory.gateway.connection.httpx.AsyncClient") as mock_client_class,
+            patch(
+                "forge_armory.gateway.connection.initialize_session", new_callable=AsyncMock
+            ) as mock_init_session,
+            patch(
+                "forge_armory.gateway.connection.list_tools_with_session", new_callable=AsyncMock
+            ) as mock_list_tools,
+        ):
             mock_client = AsyncMock()
             mock_client_class.return_value = mock_client
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=None)
-            mock_client.ping = AsyncMock()
+            mock_init_session.return_value = SessionState(
+                session_id="test-session", initialized=True, requires_session=False
+            )
 
-            # Mock list_tools response
-            mock_tool = MagicMock()
-            mock_tool.name = "get_forecast"
-            mock_tool.description = "Get weather forecast"
-            mock_tool.inputSchema = {"type": "object"}
-            mock_client.list_tools = AsyncMock(return_value=[mock_tool])
+            # Mock list_tools response (JSON-RPC format)
+            mock_list_tools.return_value = {
+                "jsonrpc": "2.0",
+                "id": "1",
+                "result": {
+                    "tools": [
+                        {
+                            "name": "get_forecast",
+                            "description": "Get weather forecast",
+                            "inputSchema": {"type": "object"},
+                        }
+                    ]
+                },
+            }
 
             await conn.connect()
             tools = await conn.list_tools()
@@ -189,22 +223,38 @@ class TestBackendConnection:
             await conn.list_tools()
 
     async def test_call_tool(self, mock_backend: Backend) -> None:
-        """Connection can call a tool."""
+        """Connection can call a tool with session support."""
         conn = BackendConnection(mock_backend)
 
-        with patch("forge_armory.gateway.connection.Client") as mock_client_class:
+        with (
+            patch("forge_armory.gateway.connection.httpx.AsyncClient") as mock_client_class,
+            patch(
+                "forge_armory.gateway.connection.initialize_session", new_callable=AsyncMock
+            ) as mock_init_session,
+            patch(
+                "forge_armory.gateway.connection.call_tool_with_session", new_callable=AsyncMock
+            ) as mock_call_tool,
+        ):
             mock_client = AsyncMock()
             mock_client_class.return_value = mock_client
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=None)
-            mock_client.ping = AsyncMock()
-            mock_client.call_tool = AsyncMock(return_value={"temperature": 20})
+            mock_init_session.return_value = SessionState(
+                session_id="test-session", initialized=True, requires_session=True
+            )
+
+            # Mock call_tool response (JSON-RPC format)
+            mock_call_tool.return_value = {
+                "jsonrpc": "2.0",
+                "id": "1",
+                "result": {"temperature": 20},
+            }
 
             await conn.connect()
             result = await conn.call_tool("get_forecast", {"city": "London"})
 
             assert result == {"temperature": 20}
-            mock_client.call_tool.assert_called_once_with("get_forecast", {"city": "London"})
+            mock_call_tool.assert_called_once_with(
+                mock_backend, "get_forecast", {"city": "London"}, "test-session", mock_client
+            )
 
     async def test_call_tool_not_connected_raises(self, mock_backend: Backend) -> None:
         """call_tool raises if not connected."""

@@ -32,6 +32,7 @@ class BackendCreate(BaseModel):
     timeout: float = Field(default=30.0, ge=1.0, le=300.0)
     prefix: str | None = Field(default=None, max_length=100)
     mount_enabled: bool = True
+    api_key: str | None = Field(default=None, max_length=500)
 
 
 class BackendUpdate(BaseModel):
@@ -43,6 +44,7 @@ class BackendUpdate(BaseModel):
     timeout: float | None = Field(default=None, ge=1.0, le=300.0)
     prefix: str | None = None
     mount_enabled: bool | None = None
+    api_key: str | None = None
 
 
 class ToolInfo(BaseModel):
@@ -120,6 +122,7 @@ class BackendRepository:
             timeout=data.timeout,
             prefix=data.prefix,
             mount_enabled=data.mount_enabled,
+            api_key=data.api_key,
         )
         self.session.add(backend)
         await self.session.flush()

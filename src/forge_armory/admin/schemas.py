@@ -22,6 +22,7 @@ class BackendCreateRequest(BaseModel):
     timeout: float = Field(default=30.0, ge=1.0, le=300.0)
     prefix: str | None = Field(default=None, max_length=100)
     mount_enabled: bool = True
+    api_key: str | None = Field(default=None, max_length=500)
 
 
 class BackendUpdateRequest(BaseModel):
@@ -32,6 +33,7 @@ class BackendUpdateRequest(BaseModel):
     timeout: float | None = Field(default=None, ge=1.0, le=300.0)
     prefix: str | None = None
     mount_enabled: bool | None = None
+    api_key: str | None = None
 
 
 class BackendResponse(BaseModel):
@@ -45,6 +47,10 @@ class BackendResponse(BaseModel):
     prefix: str | None
     mount_enabled: bool
     effective_prefix: str
+    # MCP session fields
+    session_initialized: bool = False
+    requires_session: bool = False
+    has_api_key: bool = False  # Don't expose actual key
     created_at: datetime
     updated_at: datetime
     tool_count: int = 0

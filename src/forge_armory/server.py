@@ -24,7 +24,6 @@ from forge_armory.db import (
     init_db,
 )
 from forge_armory.gateway import BackendManager, RequestContext
-from forge_armory.toon import to_json, to_toon
 
 logger = logging.getLogger(__name__)
 
@@ -54,50 +53,6 @@ def get_mcp_mode(request: Request) -> MCPMode:
     if mode == "rag":
         return MCPMode.RAG
     return MCPMode.NORMAL
-
-
-# ============================================================================
-# Output Format Support
-# ============================================================================
-
-
-class OutputFormat(str, Enum):
-    """Supported output formats for tool results."""
-
-    JSON = "json"
-    TOON = "toon"
-
-
-def get_preferred_format(request: Request) -> OutputFormat:
-    """Extract preferred output format from request headers.
-
-    Checks (in order of precedence):
-    1. X-Prefer-Format: toon → TOON format (for MCP clients - Accept header gets overwritten)
-    2. Accept: text/toon → TOON format (for direct HTTP clients like curl)
-    3. Default → JSON format
-
-    Note: The MCP SDK always overwrites the Accept header with "application/json, text/event-stream",
-    so we need to use X-Prefer-Format for TOON negotiation with MCP clients.
-
-    Args:
-        request: FastAPI request object
-
-    Returns:
-        OutputFormat enum value
-    """
-    # Check custom header first (for MCP clients)
-    prefer_format = request.headers.get("x-prefer-format", "").lower()
-    if prefer_format == "toon":
-        logger.info("TOON format requested via X-Prefer-Format header")
-        return OutputFormat.TOON
-
-    # Fallback to Accept header (for direct HTTP clients)
-    accept = request.headers.get("accept", "")
-    if "text/toon" in accept:
-        logger.info("TOON format requested via Accept header")
-        return OutputFormat.TOON
-
-    return OutputFormat.JSON
 
 
 def get_client_ip(request: Request) -> str | None:
@@ -187,14 +142,9 @@ class MCPGateway:
         Supports two modes via query parameter:
         - /mcp (default): All tools visible
         - /mcp?mode=rag: Only search_tools meta-tool visible
-
-        Supports TOON format via Accept header:
-        - Accept: text/toon → Returns tool results in TOON format
-        - Default → Returns tool results in JSON format
         """
         # Extract request context and mode
         context = get_request_context(request)
-        output_format = get_preferred_format(request)
         mcp_mode = get_mcp_mode(request)
 
         try:
@@ -209,9 +159,6 @@ class MCPGateway:
         params = body.get("params", {})
         request_id = body.get("id")
 
-        # Track content format for response header
-        content_format = "application/json"
-
         try:
             if method == "initialize":
                 result = await self._handle_initialize(params, mcp_mode)
@@ -221,9 +168,7 @@ class MCPGateway:
                 else:
                     result = await self._handle_list_tools()
             elif method == "tools/call":
-                result, content_format = await self._handle_call_tool(
-                    params, context, output_format
-                )
+                result = await self._handle_call_tool(params, context)
             elif method == "ping":
                 result = {}
             else:
@@ -238,7 +183,6 @@ class MCPGateway:
 
             return JSONResponse(
                 {"jsonrpc": "2.0", "result": result, "id": request_id},
-                headers={"X-Content-Format": content_format},
             )
 
         except Exception as e:
@@ -257,14 +201,9 @@ class MCPGateway:
 
         This provides direct access to a specific backend's tools
         without the prefix.
-
-        Supports TOON format via Accept header:
-        - Accept: text/toon → Returns tool results in TOON format
-        - Default → Returns tool results in JSON format
         """
         # Extract request context for tracking
         context = get_request_context(request)
-        output_format = get_preferred_format(request)
 
         try:
             body = await request.json()
@@ -278,18 +217,13 @@ class MCPGateway:
         params = body.get("params", {})
         request_id = body.get("id")
 
-        # Track content format for response header
-        content_format = "application/json"
-
         try:
             if method == "initialize":
                 result = await self._handle_initialize(params)
             elif method == "tools/list":
                 result = await self._handle_list_tools_for_mount(prefix)
             elif method == "tools/call":
-                result, content_format = await self._handle_call_tool_for_mount(
-                    prefix, params, context, output_format
-                )
+                result = await self._handle_call_tool_for_mount(prefix, params, context)
             elif method == "ping":
                 result = {}
             else:
@@ -304,7 +238,6 @@ class MCPGateway:
 
             return JSONResponse(
                 {"jsonrpc": "2.0", "result": result, "id": request_id},
-                headers={"X-Content-Format": content_format},
             )
 
         except Exception as e:
@@ -447,8 +380,7 @@ class MCPGateway:
         self,
         params: dict[str, Any],
         context: RequestContext,
-        output_format: OutputFormat = OutputFormat.JSON,
-    ) -> tuple[dict[str, Any], str]:
+    ) -> dict[str, Any]:
         """Call a tool using its prefixed name.
 
         In RAG mode, the search_tools meta-tool is handled specially.
@@ -457,10 +389,9 @@ class MCPGateway:
         Args:
             params: MCP call params with name and arguments
             context: Request context for tracking
-            output_format: Preferred output format
 
         Returns:
-            Tuple of (MCP result dict, content_type string)
+            MCP result dict
         """
         tool_name = params.get("name", "")
         arguments = params.get("arguments", {})
@@ -472,13 +403,13 @@ class MCPGateway:
         # Normal tool call - works in both modes
         result = await self.manager.call_tool(tool_name, arguments, context)
 
-        # Convert result to MCP format with optional TOON
-        return self._format_tool_result(result, output_format)
+        # Convert result to MCP format (always JSON)
+        return self._format_tool_result(result)
 
     async def _handle_search_tools(
         self,
         arguments: dict[str, Any],
-    ) -> tuple[dict[str, Any], str]:
+    ) -> dict[str, Any]:
         """Handle the search_tools meta-tool call.
 
         Searches for tools matching the query using semantic similarity.
@@ -488,7 +419,7 @@ class MCPGateway:
             arguments: Tool arguments with query and optional threshold
 
         Returns:
-            Tuple of (MCP result dict, content_type string)
+            MCP result dict
         """
         from forge_armory.toolrag import (
             format_search_response,
@@ -500,21 +431,18 @@ class MCPGateway:
         threshold = arguments.get("threshold")
 
         if not query:
-            return (
-                {
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": json.dumps({
-                                "error": "Query is required",
-                                "tools": [],
-                                "total_matches": 0,
-                            }),
-                        }
-                    ]
-                },
-                "application/json",
-            )
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": json.dumps({
+                            "error": "Query is required",
+                            "tools": [],
+                            "total_matches": 0,
+                        }),
+                    }
+                ]
+            }
 
         # Search for matching tools (returns all matching threshold)
         async with self._session_maker() as session:
@@ -528,28 +456,23 @@ class MCPGateway:
         result = format_search_results(tools, query)
         response = format_search_response(result)
 
-        return (
-            {"content": [{"type": "text", "text": json.dumps(response)}]},
-            "application/json",
-        )
+        return {"content": [{"type": "text", "text": json.dumps(response)}]}
 
     async def _handle_call_tool_for_mount(
         self,
         prefix: str,
         params: dict[str, Any],
         context: RequestContext,
-        output_format: OutputFormat = OutputFormat.JSON,
-    ) -> tuple[dict[str, Any], str]:
+    ) -> dict[str, Any]:
         """Call a tool on a specific mount using unprefixed name.
 
         Args:
             prefix: Backend prefix
             params: MCP call params with name and arguments
             context: Request context for tracking
-            output_format: Preferred output format
 
         Returns:
-            Tuple of (MCP result dict, content_type string)
+            MCP result dict
         """
         tool_name = params.get("name", "")
         arguments = params.get("arguments", {})
@@ -558,46 +481,27 @@ class MCPGateway:
         prefixed_name = f"{prefix}__{tool_name}"
         result = await self.manager.call_tool(prefixed_name, arguments, context)
 
-        return self._format_tool_result(result, output_format)
+        return self._format_tool_result(result)
 
-    def _format_tool_result(
-        self,
-        result: Any,
-        output_format: OutputFormat = OutputFormat.JSON,
-    ) -> tuple[dict[str, Any], str]:
+    def _format_tool_result(self, result: Any) -> dict[str, Any]:
         """Format tool result for MCP response.
 
-        When TOON format is explicitly requested (via Accept header),
-        always attempt TOON conversion regardless of data shape.
-        Falls back to JSON only if TOON conversion fails.
+        Always returns JSON format. TOON transformation is handled
+        by the orchestrator, not armory.
 
         Args:
             result: Raw tool result from backend
-            output_format: Preferred output format (JSON or TOON)
 
         Returns:
-            Tuple of (MCP result dict, content_type string)
+            MCP result dict with JSON content
         """
         # Extract actual data from result
         data = self._extract_result_data(result)
 
-        # When TOON is explicitly requested, attempt conversion
-        if output_format == OutputFormat.TOON:
-            toon_result = to_toon(data)
-            if toon_result is not None:
-                return (
-                    {"content": [{"type": "text", "text": toon_result}]},
-                    "text/toon",
-                )
-            # Fall through to JSON if TOON conversion fails
+        # Always return JSON
+        text = data if isinstance(data, str) else json.dumps(data, default=str)
 
-        # Default to JSON
-        text = data if isinstance(data, str) else to_json(data)
-
-        return (
-            {"content": [{"type": "text", "text": text}]},
-            "application/json",
-        )
+        return {"content": [{"type": "text", "text": text}]}
 
     def _extract_result_data(self, result: Any) -> Any:
         """Extract the actual data from a tool result.
@@ -641,6 +545,15 @@ class MCPGateway:
                 return self._try_parse_json(first.get("text", ""))
 
         data = result
+
+        # Handle dict that is already MCP-formatted (has "content" key with list)
+        # This happens when backend returns raw JSON-RPC result
+        if isinstance(result, dict) and "content" in result:
+            content = result["content"]
+            if isinstance(content, list) and content:
+                first = content[0]
+                if isinstance(first, dict) and first.get("type") == "text":
+                    return self._try_parse_json(first.get("text", ""))
 
         # Handle list of MCP content items (dict format)
         if isinstance(result, list) and result:

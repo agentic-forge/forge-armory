@@ -73,6 +73,27 @@ class Backend(Base):
         default=True,
         nullable=False,
     )
+
+    # MCP session management fields
+    session_id: Mapped[str | None] = mapped_column(
+        String(200),
+        nullable=True,
+    )
+    session_initialized: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )
+    requires_session: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )
+    api_key: Mapped[str | None] = mapped_column(
+        String(500),
+        nullable=True,
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         default=utcnow,
         nullable=False,
